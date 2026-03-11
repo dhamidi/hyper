@@ -269,6 +269,26 @@ type Link struct {
 - `Target` SHALL identify the destination
 - `Type` MAY indicate the expected response media type
 
+#### Recommended Link Rel: `"actions"`
+
+A `Link` with `rel: "actions"` MAY point to a resource that enumerates
+available actions for the current resource or collection.
+
+When the available actions are known at response time, servers SHOULD embed
+them directly in the `Representation`'s `Actions` array rather than
+requiring a separate fetch. The `"actions"` link is primarily useful when:
+
+- The set of available actions is large and would bloat the primary
+  representation.
+- Actions are computed lazily or depend on additional authorization checks.
+- The server wants to offer a stable, cacheable "action catalog" separate
+  from the resource state.
+
+When a client follows an `"actions"` link, the response SHOULD be a
+`Representation` whose `Actions` array contains the available actions for
+the originating resource. Clients MAY merge these actions with any actions
+already present on the originating representation.
+
 ### 7.2 Action
 
 ```go
@@ -293,6 +313,37 @@ type Action struct {
 - `Produces` MAY list likely response media types
 - `Fields` MAY describe input required by the action
 - `Hints` MAY contain codec-specific or UI-specific metadata
+
+#### Action.Rel Vocabulary
+
+`Action.Rel` is an open string vocabulary — any string value is acceptable.
+
+The spec RECOMMENDS the following well-known rels for CRUD operations:
+
+| Rel        | Description                                      |
+|------------|--------------------------------------------------|
+| `create`   | Create a new resource                            |
+| `update`   | Update an existing resource                      |
+| `delete`   | Delete an existing resource                      |
+| `search`   | Search or query a collection                     |
+
+These well-known rels carry standard semantics that generic clients MAY
+optimize for — for example, a CLI client might map `create` to a `POST`
+workflow with field prompts, or a web UI might render `delete` with a
+destructive button style.
+
+All other `Action.Rel` values are domain-specific. Clients SHOULD treat
+unknown rels as opaque identifiers and surface them by name — for example,
+as subcommands in a CLI, or as buttons in a UI. No namespacing convention
+(e.g., `x-archive`) is required. The `Action.Name` field provides a
+human-readable label, and `Action.Hints` provides sufficient context for
+clients to render domain-specific actions appropriately.
+
+The client algorithm for rendering actions is simple: render all `Actions`
+in the `Representation` as available commands or buttons. Well-known rels
+(`create`, `update`, `delete`, `search`) MAY receive special treatment
+(e.g., mapping to HTTP verbs, special icons, or specific UI patterns), but
+all rels are valid and renderable.
 
 #### Design Note
 
@@ -1308,3 +1359,17 @@ The following questions remain open for later revisions:
 5. whether provider interfaces should accept a `context.Context` parameter
 6. whether `Hints` keys should follow a namespacing convention (e.g.
    `htmx:target` vs `hx-target`) to avoid collisions across frameworks
+
+### 18.1 Resolved
+
+The following questions have been resolved:
+
+1. **`Action.Rel` vocabulary for domain-specific verbs.** Resolved in §7.2:
+   `Action.Rel` is an open string vocabulary. The spec recommends well-known
+   rels (`create`, `update`, `delete`, `search`) for CRUD operations. All
+   other rels are domain-specific and clients should treat them as opaque
+   identifiers. No namespace prefix is required.
+2. **Actions discovery convention.** Resolved in §7.1: a `Link` with
+   `rel: "actions"` MAY point to a resource enumerating available actions.
+   Servers should prefer embedding actions directly in the `Representation`'s
+   `Actions` array when possible.

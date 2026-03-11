@@ -2923,19 +2923,127 @@ The `archive` and `unarchive` commands come from `Actions` on individual contact
 - **Verb-oriented UX.** `cli contacts archive 1` reads naturally as an imperative command. The user thinks "archive this contact," not "create an archive resource." The CLI surface mirrors the user's intent.
 - **Fewer resources and endpoints.** Archive and merge do not require their own collection endpoints. The API has `/contacts`, `/contacts/1/archive`, `/contacts/merge`, and `/contacts/export` — no `/contacts/archives`, `/contacts/merges` collections to manage.
 - **History is separate from the operation.** You do not have to "create a merge" to merge contacts. The action happens directly; the history entry is a side effect. This keeps the primary interaction simple.
+- **No vocabulary list needed.** Because `Action.Rel` is an open vocabulary (per spec §7.2), the CLI does not need to maintain a list of known rels. It renders all `Actions` in the `Representation` as available commands, using `Action.Name` for the human-readable label and `Action.Rel` as the subcommand identifier. Well-known rels (`create`, `update`, `delete`) may get special treatment, but unknown rels like `archive`, `merge`, and `export` are rendered as named subcommands without any client-side vocabulary mapping.
 
 **Disadvantages:**
 
-- **Non-standard `Action.Rel` values.** Actions like `archive`, `unarchive`, `merge`, and `export` do not follow the standard CRUD `Rel` vocabulary (`create`, `update`, `delete`). The CLI must handle arbitrary `Action.Rel` values — it cannot assume every `Action` maps to a known CRUD verb. The command tree construction algorithm (see [Section 7.4](#74-command-tree-construction-algorithm)) needs to treat any unrecognized `Rel` as a named subcommand.
 - **Disconnected history.** The history resources are read-only and somewhat decoupled from the actions that produce them. There is no `Link` from a history entry back to the action that created it (because the action is not a resource). In contrast, the resource-based approach in Section 15 lets you navigate from a merge record to the involved contacts.
 - **Export blurs action and resource.** The async export produces a job `Representation` that the user polls — the job itself becomes a resource with state transitions. This is the same pattern as [Section 15.4](#154-export-as-a-resource), undermining the "actions, not resources" philosophy. The distinction is that the job is a consequence of the action, not the primary interface for initiating the export.
 - **Non-uniform undo semantics.** Archive has a clean inverse (`unarchive`), but merge may be irreversible — there is no `unmerge` action. The history records what happened but cannot reverse it. In contrast, the resource-based approach can offer `DELETE` on an archive resource for undo, giving a more uniform reversal pattern.
 
-### 16.6 Spec Feedback
+### 16.6 Actions Discovery with the `"actions"` Link
+
+The examples above embed all available actions directly in the `Representation`'s `Actions` array. This is the RECOMMENDED default (per spec §7.1). However, when the set of available actions is large, lazily computed, or depends on additional authorization checks, a server MAY use a `Link` with `rel: "actions"` to point to a separate actions catalog.
+
+#### 16.6.1 Contact with Embedded Actions (Default Pattern)
+
+The contact representation from [Section 16.1.1](#1611-contact-with-archive-action-server-side) already demonstrates the default pattern: all domain-specific actions (`archive`, `update`, `delete`) are embedded directly in the `Actions` array. The CLI discovers them from the representation itself, with no additional fetch required.
+
+The CLI renders these actions as subcommands using a simple algorithm:
+
+1. List all `Actions` from the `Representation`.
+2. For well-known rels (`create`, `update`, `delete`, `search`), apply standard behavior (e.g., map `delete` to a destructive command style).
+3. For all other rels, surface them as named subcommands using `Action.Rel` as the command name and `Action.Name` as the description.
+4. Use `Action.Hints` to adjust rendering (e.g., `"confirm"` triggers a prompt, `"destructive"` shows a warning).
+
+#### 16.6.2 Separate Actions Catalog (Escape Hatch)
+
+When a resource has many possible actions — for example, a contact in a CRM with dozens of workflow automations — embedding them all would bloat the primary representation. In this case, the server provides a `Link` with `rel: "actions"` instead:
+
+```go
+contact := hyper.Representation{
+    Kind: "contact",
+    Self: &hyper.Target{Href: "/contacts/1"},
+    State: hyper.Object{
+        "id":    hyper.Scalar{V: 1},
+        "name":  hyper.Scalar{V: "Ada Lovelace"},
+        "email": hyper.Scalar{V: "ada@example.com"},
+    },
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        {Rel: "actions", Target: hyper.Target{Href: "/contacts/1/actions"}, Title: "Available Actions"},
+    },
+    Actions: []hyper.Action{
+        // Only the most common actions are embedded directly
+        {
+            Name:     "Update Contact",
+            Rel:      "update",
+            Method:   "PUT",
+            Target:   hyper.Target{Href: "/contacts/1"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
+                {Name: "email", Type: "email", Label: "Email", Value: "ada@example.com", Required: true},
+            },
+        },
+    },
+}
+```
+
+The `/contacts/1/actions` endpoint returns a `Representation` whose `Actions` array lists all available actions:
+
+```json
+{
+  "kind": "action-catalog",
+  "self": {"href": "/contacts/1/actions"},
+  "links": [
+    {"rel": "contact", "href": "/contacts/1", "title": "Ada Lovelace"}
+  ],
+  "actions": [
+    {"name": "Archive Contact", "rel": "archive", "method": "POST", "href": "/contacts/1/archive"},
+    {"name": "Merge Into", "rel": "merge", "method": "POST", "href": "/contacts/1/merge"},
+    {"name": "Send Welcome Email", "rel": "send-welcome", "method": "POST", "href": "/contacts/1/send-welcome"},
+    {"name": "Add to Campaign", "rel": "add-to-campaign", "method": "POST", "href": "/contacts/1/add-to-campaign",
+      "fields": [{"name": "campaign_id", "type": "text", "label": "Campaign ID", "required": true}]
+    },
+    {"name": "Export vCard", "rel": "export-vcard", "method": "GET", "href": "/contacts/1/vcard"}
+  ]
+}
+```
+
+#### 16.6.3 CLI Interaction: Actions Discovery
+
+When the CLI encounters a `Link` with `rel: "actions"`, it can offer an `actions` subcommand that lists and invokes available actions:
+
+```
+$ cli contacts show 1
+Ada Lovelace
+  ID:    1
+  Email: ada@example.com
+
+Available actions:
+  update    Update Contact (cli contacts update 1 --name NAME --email EMAIL)
+
+More actions available:
+  cli contacts actions 1
+
+Navigate:
+  contacts  All Contacts (cli contacts)
+  actions   Available Actions (cli contacts actions 1)
+
+$ cli contacts actions 1
+Available actions for Ada Lovelace:
+  archive           Archive Contact
+  merge             Merge Into
+  send-welcome      Send Welcome Email
+  add-to-campaign   Add to Campaign
+  export-vcard      Export vCard
+
+Usage:
+  cli contacts archive 1
+  cli contacts send-welcome 1
+  cli contacts add-to-campaign 1 --campaign_id ID
+```
+
+The CLI merges actions from the embedded `Actions` array with those discovered via the `"actions"` link, giving a complete view of available operations.
+
+### 16.7 Spec Feedback
 
 The actions-with-history approach surfaces additional questions for the spec:
 
-- **`Action.Rel` vocabulary for domain-specific verbs.** The spec should clarify how clients handle `Action.Rel` values beyond the standard CRUD set (`create`, `update`, `delete`). Should there be a convention for domain-specific rels (e.g., prefixing with a namespace like `x-archive`), or is any string acceptable? The CLI in this section treats any unrecognized `Rel` as a named subcommand, which works but means the client cannot distinguish "standard operation" from "domain extension" without maintaining its own vocabulary list.
+- **`Action.Rel` vocabulary for domain-specific verbs (RESOLVED).** The spec now clarifies (§7.2) that `Action.Rel` is an open string vocabulary — any string is acceptable. The spec recommends well-known rels (`create`, `update`, `delete`, `search`) for CRUD operations and states that all other rels are domain-specific. Clients should treat unknown rels as opaque identifiers and surface them by name. No namespace prefix (e.g., `x-archive`) is required — `Action.Name` and `Action.Hints` provide sufficient context for rendering.
+
+- **`"actions"` link rel for action discovery (RESOLVED).** The spec now defines (§7.1) a recommended `Link` with `rel: "actions"` that points to a resource enumerating available actions. Servers should prefer embedding actions directly in the `Representation`'s `Actions` array when possible. The `"actions"` link is an escape hatch for large or lazily-computed action sets. See [Section 16.6](#166-actions-discovery-with-the-actions-link) for the demonstration.
 
 - **`Action` producing an async result.** The export `Action` returns a job `Representation` rather than the final result. The spec has no way for an `Action` to signal that its response is an async job that should be polled. A `Hints` key like `"async": true` or a `Produces` hint specifying a job `Kind` would let clients handle this generically — e.g., a CLI could automatically poll and display progress, or a web UI could show a spinner.
 
@@ -2947,7 +3055,15 @@ The actions-with-history approach surfaces additional questions for the spec:
 
 ## 17. Spec Feedback
 
-After playing through the full contacts CLI scenario, the following gaps and questions emerge:
+After playing through the full contacts CLI scenario, the following gaps and questions emerge.
+
+**Resolved items** (addressed in the spec):
+
+- **`Action.Rel` is an open vocabulary (RESOLVED).** The spec (§7.2) now clarifies that `Action.Rel` is an open string vocabulary. Well-known rels (`create`, `update`, `delete`, `search`) are recommended for CRUD; all other rels are domain-specific and require no namespace prefix. Clients treat unknown rels as opaque identifiers.
+
+- **`"actions"` link rel convention (RESOLVED).** The spec (§7.1) now defines a recommended `Link` with `rel: "actions"` for discovering available actions. Actions should be embedded directly in the `Actions` array when possible; the `"actions"` link is an escape hatch for large or lazily-computed action sets.
+
+**Open items:**
 
 - **Action discoverability on collections vs. items.** The contacts list `Representation` carries a `create` `Action`, and each embedded contact carries `update`/`delete` `Actions`. The spec does not formally distinguish "collection-level" actions from "item-level" actions. A CLI needs to know whether an `Action` applies to the collection itself or to individual items within `Embedded`. Consider clarifying in §6.1 or §7.2 that `Actions` on the outer `Representation` are collection-level, while `Actions` on `Embedded` representations are item-level — or introduce a convention for this.
 
