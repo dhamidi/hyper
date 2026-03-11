@@ -856,40 +856,59 @@ through the open `Hints` and `Meta` maps without any core model changes.
 
 **How do I render a `hyper.Representation` as an `htmlc` component tree?**
 
-Map `Representation.Kind` to an `htmlc` component, pass `State` fields as
-props, and render child components for embedded representations:
+`htmlc` is a server-side Go template engine that uses Vue.js Single File
+Component (`.vue`) syntax.  Author a `.vue` template for each
+representation kind, convert `Representation` state into a
+`map[string]any` scope, and render with the `htmlc.Engine`:
+
+```vue
+<!-- components/contact.vue -->
+<template>
+  <div class="contact">
+    <h2>{{ name }}</h2>
+    <p>{{ email }}</p>
+    <slot name="email_editor"></slot>
+  </div>
+</template>
+
+<script>
+export default {
+  props: ['name', 'email']
+}
+</script>
+```
+
+Convert a `hyper.Representation` into an `htmlc`-compatible scope:
 
 ```go
-func renderComponent(r hyper.Representation) htmlc.Component {
-    c := htmlc.New(r.Kind)
-
-    // Pass state fields as props.
+func representationToScope(r hyper.Representation) map[string]any {
+    scope := map[string]any{"kind": r.Kind}
     if obj, ok := r.State.(hyper.Object); ok {
         for k, v := range obj {
             if s, ok := v.(hyper.Scalar); ok {
-                c.Set(k, s.V)
+                scope[k] = s.V
             }
         }
     }
-
-    // Render embedded representations as child components.
+    // Embedded representations become nested scopes for slots.
     for slot, reps := range r.Embedded {
+        var items []map[string]any
         for _, embedded := range reps {
-            c.Slot(slot, renderComponent(embedded))
+            items = append(items, representationToScope(embedded))
         }
+        scope[slot] = items
     }
-
-    return c
+    return scope
 }
 ```
 
-Use the component in a handler:
+Use the engine in a handler:
 
 ```go
-func contactHandler(w http.ResponseWriter, r *http.Request) {
+func contactHandler(eng *htmlc.Engine, w http.ResponseWriter, r *http.Request) {
     rep := buildContactRepresentation()
-    component := renderComponent(rep)
-    _ = htmlc.Render(w, component)
+    scope := representationToScope(rep)
+    _ = eng.RenderPage(w, "contact", scope)
 }
 ```
 
