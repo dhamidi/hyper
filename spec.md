@@ -870,12 +870,6 @@ representation kind, convert `Representation` state into a
     <slot name="email_editor"></slot>
   </div>
 </template>
-
-<script>
-export default {
-  props: ['name', 'email']
-}
-</script>
 ```
 
 Convert a `hyper.Representation` into an `htmlc`-compatible scope:
