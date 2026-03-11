@@ -2238,7 +2238,714 @@ Every command in this tree is discovered through the standard link-following and
 - **Forced resource metaphor.** Merges and exports feel more like processes or jobs than entities. A merge is a one-time transformation; modelling it as a persistent resource adds storage and complexity that may not be warranted unless audit is a requirement.
 - **Async complexity for exports.** The export resource has state transitions (`pending` to `complete`) that the CLI must handle — polling or re-fetching to check status. The spec does not define conventions for async/job-like resources, so the polling behavior must be invented by the client.
 
-## 16. Spec Feedback
+## 16. Alternative: Non-CRUD Operations as Actions with History
+
+Where [Section 15](#15-alternative-non-crud-operations-as-resources) models every operation as a new resource you create, this section explores the opposite emphasis: operations are `Actions` on the contact (or contact list) `Representation` itself, and each operation also writes to a separate, read-only history resource that serves as an audit trail. The user's mental model is "do something to a contact" (verb-oriented), not "create an archive object" (noun-oriented). The history resources exist for auditability but are not the primary interface for performing operations.
+
+### 16.1 Archive as an Action with History
+
+The single contact `Representation` (from [Section 6.2](#62-single-contact-server-side)) gains an `Action` with `rel: "archive"`. Submitting it archives the contact directly. A separate history collection at `/contacts/1/history` tracks lifecycle events.
+
+#### 16.1.1 Contact with Archive Action (Server Side)
+
+```go
+contact := hyper.Representation{
+    Kind: "contact",
+    Self: &hyper.Target{Href: "/contacts/1"},
+    State: hyper.Object{
+        "id":       hyper.Scalar{V: 1},
+        "name":     hyper.Scalar{V: "Ada Lovelace"},
+        "email":    hyper.Scalar{V: "ada@example.com"},
+        "phone":    hyper.Scalar{V: "+1-555-0100"},
+        "archived": hyper.Scalar{V: false},
+    },
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        {Rel: "history", Target: hyper.Target{Href: "/contacts/1/history"}, Title: "History"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Update Contact",
+            Rel:      "update",
+            Method:   "PUT",
+            Target:   hyper.Target{Href: "/contacts/1"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
+                {Name: "email", Type: "email", Label: "Email", Value: "ada@example.com", Required: true},
+                {Name: "phone", Type: "tel", Label: "Phone", Value: "+1-555-0100"},
+            },
+        },
+        {
+            Name:   "Delete Contact",
+            Rel:    "delete",
+            Method: "DELETE",
+            Target: hyper.Target{Href: "/contacts/1"},
+            Hints: map[string]any{
+                "confirm":     "Are you sure you want to delete Ada Lovelace?",
+                "destructive": true,
+            },
+        },
+        {
+            Name:   "Archive Contact",
+            Rel:    "archive",
+            Method: "POST",
+            Target: hyper.Target{Href: "/contacts/1/archive"},
+            Hints: map[string]any{
+                "confirm": "Are you sure you want to archive Ada Lovelace?",
+            },
+        },
+    },
+}
+```
+
+#### 16.1.2 Contact with Archive Action (JSON Wire Format)
+
+```json
+{
+  "kind": "contact",
+  "self": {"href": "/contacts/1"},
+  "state": {
+    "id": 1,
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "phone": "+1-555-0100",
+    "archived": false
+  },
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "All Contacts"},
+    {"rel": "history", "href": "/contacts/1/history", "title": "History"}
+  ],
+  "actions": [
+    {
+      "name": "Update Contact",
+      "rel": "update",
+      "method": "PUT",
+      "href": "/contacts/1",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {"name": "name", "type": "text", "label": "Name", "value": "Ada Lovelace", "required": true},
+        {"name": "email", "type": "email", "label": "Email", "value": "ada@example.com", "required": true},
+        {"name": "phone", "type": "tel", "label": "Phone", "value": "+1-555-0100"}
+      ]
+    },
+    {
+      "name": "Delete Contact",
+      "rel": "delete",
+      "method": "DELETE",
+      "href": "/contacts/1",
+      "hints": {
+        "confirm": "Are you sure you want to delete Ada Lovelace?",
+        "destructive": true
+      }
+    },
+    {
+      "name": "Archive Contact",
+      "rel": "archive",
+      "method": "POST",
+      "href": "/contacts/1/archive",
+      "hints": {
+        "confirm": "Are you sure you want to archive Ada Lovelace?"
+      }
+    }
+  ]
+}
+```
+
+#### 16.1.3 CLI Interaction: Archiving
+
+The CLI maps the `archive` `Action` to a direct verb command. Since `Action.Rel` is `"archive"` (not one of the standard CRUD rels), the CLI surfaces it as a named subcommand on the contact.
+
+```
+$ cli contacts show 1
+Ada Lovelace
+  ID:       1
+  Email:    ada@example.com
+  Phone:    +1-555-0100
+  Archived: false
+
+Available actions:
+  update    Update contact (cli contacts update 1 --name NAME --email EMAIL)
+  delete    Delete contact (cli contacts delete 1) [confirm] [destructive]
+  archive   Archive contact (cli contacts archive 1) [confirm]
+
+Navigate:
+  contacts  All Contacts (cli contacts)
+  history   History (cli contacts history 1)
+
+$ cli contacts archive 1
+? Are you sure you want to archive Ada Lovelace? (y/N) y
+Contact archived.
+
+  ID:       1
+  Name:     Ada Lovelace
+  Archived: true
+```
+
+#### 16.1.4 Archived Contact Representation (Server Side)
+
+After archiving, the contact's `Representation` changes: `"archived"` becomes `true`, the `archive` `Action` is replaced by an `unarchive` `Action`, and the `update` and `delete` `Actions` are removed (the server no longer offers them for archived contacts).
+
+```go
+archivedContact := hyper.Representation{
+    Kind: "contact",
+    Self: &hyper.Target{Href: "/contacts/1"},
+    State: hyper.Object{
+        "id":       hyper.Scalar{V: 1},
+        "name":     hyper.Scalar{V: "Ada Lovelace"},
+        "email":    hyper.Scalar{V: "ada@example.com"},
+        "phone":    hyper.Scalar{V: "+1-555-0100"},
+        "archived": hyper.Scalar{V: true},
+    },
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        {Rel: "history", Target: hyper.Target{Href: "/contacts/1/history"}, Title: "History"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Unarchive Contact",
+            Rel:    "unarchive",
+            Method: "POST",
+            Target: hyper.Target{Href: "/contacts/1/unarchive"},
+        },
+    },
+}
+```
+
+#### 16.1.5 Archived Contact (JSON Wire Format)
+
+```json
+{
+  "kind": "contact",
+  "self": {"href": "/contacts/1"},
+  "state": {
+    "id": 1,
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "phone": "+1-555-0100",
+    "archived": true
+  },
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "All Contacts"},
+    {"rel": "history", "href": "/contacts/1/history", "title": "History"}
+  ],
+  "actions": [
+    {
+      "name": "Unarchive Contact",
+      "rel": "unarchive",
+      "method": "POST",
+      "href": "/contacts/1/unarchive"
+    }
+  ]
+}
+```
+
+#### 16.1.6 Contact History (Server Side)
+
+The `Link` with `rel: "history"` on the contact points to a read-only collection of timestamped lifecycle events. The history `Representation` has no mutation `Actions` — it is an audit trail.
+
+```go
+history := hyper.Representation{
+    Kind: "history",
+    Self: &hyper.Target{Href: "/contacts/1/history"},
+    Links: []hyper.Link{
+        {Rel: "contact", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+    },
+    Embedded: map[string][]hyper.Representation{
+        "items": {
+            {
+                Kind: "history-entry",
+                State: hyper.Object{
+                    "event": hyper.Scalar{V: "created"},
+                    "at":    hyper.Scalar{V: "2025-01-10T08:00:00Z"},
+                    "by":    hyper.Scalar{V: "user@example.com"},
+                },
+            },
+            {
+                Kind: "history-entry",
+                State: hyper.Object{
+                    "event": hyper.Scalar{V: "archived"},
+                    "at":    hyper.Scalar{V: "2025-01-15T10:30:00Z"},
+                    "by":    hyper.Scalar{V: "user@example.com"},
+                },
+            },
+        },
+    },
+}
+```
+
+#### 16.1.7 Contact History (JSON Wire Format)
+
+```json
+{
+  "kind": "history",
+  "self": {"href": "/contacts/1/history"},
+  "links": [
+    {"rel": "contact", "href": "/contacts/1", "title": "Ada Lovelace"}
+  ],
+  "embedded": {
+    "items": [
+      {
+        "kind": "history-entry",
+        "state": {
+          "event": "created",
+          "at": "2025-01-10T08:00:00Z",
+          "by": "user@example.com"
+        }
+      },
+      {
+        "kind": "history-entry",
+        "state": {
+          "event": "archived",
+          "at": "2025-01-15T10:30:00Z",
+          "by": "user@example.com"
+        }
+      }
+    ]
+  }
+}
+```
+
+#### 16.1.8 CLI Interaction: Viewing History
+
+```
+$ cli contacts history 1
+History for Ada Lovelace
+┌──────────┬──────────────────────┬──────────────────┐
+│ Event    │ At                   │ By               │
+├──────────┼──────────────────────┼──────────────────┤
+│ created  │ 2025-01-10T08:00:00Z │ user@example.com │
+│ archived │ 2025-01-15T10:30:00Z │ user@example.com │
+└──────────┴──────────────────────┴──────────────────┘
+
+Navigate:
+  contact   Ada Lovelace (cli contacts show 1)
+```
+
+### 16.2 Merge as an Action with History
+
+Merge operates across contacts, so the `Action` lives on the contact list `Representation` rather than on a single contact. The merge action accepts source IDs and a target ID.
+
+#### 16.2.1 Contact List with Merge Action (Server Side)
+
+The contacts list `Representation` (from [Section 5.2](#52-contacts-list-server-side)) gains `Actions` with `rel: "merge"` and `rel: "export"`, plus a `Link` to the exports history.
+
+```go
+list := hyper.Representation{
+    Kind: "contact-list",
+    Self: &hyper.Target{Href: "/contacts"},
+    Links: []hyper.Link{
+        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "Export History"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Create Contact",
+            Rel:      "create",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "name", Type: "text", Label: "Name", Required: true},
+                {Name: "email", Type: "email", Label: "Email", Required: true},
+                {Name: "phone", Type: "tel", Label: "Phone"},
+            },
+        },
+        {
+            Name:     "Merge Contacts",
+            Rel:      "merge",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts/merge"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {
+                    Name:     "sources",
+                    Type:     "text",
+                    Label:    "Source Contact IDs",
+                    Help:     "Comma-separated IDs of contacts to merge into the target",
+                    Required: true,
+                },
+                {
+                    Name:     "target",
+                    Type:     "text",
+                    Label:    "Target Contact ID",
+                    Help:     "The contact that absorbs the others",
+                    Required: true,
+                },
+            },
+        },
+        {
+            Name:     "Export Contacts",
+            Rel:      "export",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts/export"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {
+                    Name:     "format",
+                    Type:     "select",
+                    Label:    "Format",
+                    Required: true,
+                    Options: []hyper.Option{
+                        {Value: "csv", Label: "CSV"},
+                        {Value: "vcf", Label: "vCard"},
+                        {Value: "json", Label: "JSON"},
+                    },
+                },
+            },
+        },
+    },
+    // Embedded items omitted for brevity — same as Section 5.2
+}
+```
+
+#### 16.2.2 Contact List with Actions (JSON Wire Format)
+
+```json
+{
+  "kind": "contact-list",
+  "self": {"href": "/contacts"},
+  "links": [
+    {"rel": "root", "href": "/", "title": "Home"},
+    {"rel": "exports", "href": "/contacts/exports", "title": "Export History"}
+  ],
+  "actions": [
+    {
+      "name": "Create Contact",
+      "rel": "create",
+      "method": "POST",
+      "href": "/contacts",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {"name": "name", "type": "text", "label": "Name", "required": true},
+        {"name": "email", "type": "email", "label": "Email", "required": true},
+        {"name": "phone", "type": "tel", "label": "Phone"}
+      ]
+    },
+    {
+      "name": "Merge Contacts",
+      "rel": "merge",
+      "method": "POST",
+      "href": "/contacts/merge",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {
+          "name": "sources",
+          "type": "text",
+          "label": "Source Contact IDs",
+          "help": "Comma-separated IDs of contacts to merge into the target",
+          "required": true
+        },
+        {
+          "name": "target",
+          "type": "text",
+          "label": "Target Contact ID",
+          "help": "The contact that absorbs the others",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "Export Contacts",
+      "rel": "export",
+      "method": "POST",
+      "href": "/contacts/export",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {
+          "name": "format",
+          "type": "select",
+          "label": "Format",
+          "required": true,
+          "options": [
+            {"value": "csv", "label": "CSV"},
+            {"value": "vcf", "label": "vCard"},
+            {"value": "json", "label": "JSON"}
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 16.2.3 CLI Interaction: Merging
+
+```
+$ cli contacts merge --sources 2,3 --target 1
+Contacts merged.
+
+  Target: Ada Lovelace (#1)
+  Merged: Grace Hopper (#2), Charles Babbage (#3)
+  Changes:
+    phone: added +1-555-0200 (from Grace Hopper)
+    notes: combined 3 notes from 2 sources
+```
+
+The response is the merged contact's `Representation`, which the server returns directly from the `POST /contacts/merge` endpoint. The merge also writes an entry to the target contact's history.
+
+#### 16.2.4 Merge History Entry
+
+After the merge, the target contact's history at `/contacts/1/history` gains a merge entry:
+
+```json
+{
+  "kind": "history-entry",
+  "state": {
+    "event": "merged",
+    "at": "2025-07-01T14:00:00Z",
+    "by": "user@example.com",
+    "details": {
+      "sources": [2, 3],
+      "changes": {
+        "phone": "added +1-555-0200 (from Grace Hopper)",
+        "notes": "combined 3 notes from 2 sources"
+      }
+    }
+  }
+}
+```
+
+The history entry records what was merged and what changed, providing the same auditability as the resource-based approach in [Section 15.3](#153-merge-as-a-resource), but as a read-only log entry rather than a first-class resource.
+
+### 16.3 Export as an Action with History
+
+Export is an `Action` on the contact list `Representation`. Since export is asynchronous, the action's response returns a `Representation` of the running export job. The history of past exports lives at `/contacts/exports` as a read-only log.
+
+#### 16.3.1 CLI Interaction: Exporting
+
+The `export` `Action` is discovered on the contact list (see [Section 16.2.1](#1621-contact-list-with-merge-action-server-side)). The CLI maps `Action.Rel: "export"` to a subcommand.
+
+```
+$ cli contacts export --format csv
+Export started.
+
+  ID:     1
+  Format: csv
+  Status: pending
+
+Check status:
+  cli contacts exports show 1
+```
+
+The `POST /contacts/export` response is an `export-job` `Representation`:
+
+#### 16.3.2 Pending Export Job (Server Side)
+
+```go
+pendingJob := hyper.Representation{
+    Kind: "export-job",
+    Self: &hyper.Target{Href: "/contacts/exports/1"},
+    State: hyper.Object{
+        "id":         hyper.Scalar{V: 1},
+        "format":     hyper.Scalar{V: "csv"},
+        "status":     hyper.Scalar{V: "pending"},
+        "created_at": hyper.Scalar{V: "2025-08-10T09:00:00Z"},
+    },
+    Links: []hyper.Link{
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+    },
+}
+```
+
+#### 16.3.3 Pending Export Job (JSON Wire Format)
+
+```json
+{
+  "kind": "export-job",
+  "self": {"href": "/contacts/exports/1"},
+  "state": {
+    "id": 1,
+    "format": "csv",
+    "status": "pending",
+    "created_at": "2025-08-10T09:00:00Z"
+  },
+  "links": [
+    {"rel": "exports", "href": "/contacts/exports", "title": "All Exports"}
+  ]
+}
+```
+
+#### 16.3.4 Complete Export Job (Server Side)
+
+Once processing finishes, the job gains a `download` `Link` and updated state:
+
+```go
+completeJob := hyper.Representation{
+    Kind: "export-job",
+    Self: &hyper.Target{Href: "/contacts/exports/1"},
+    State: hyper.Object{
+        "id":           hyper.Scalar{V: 1},
+        "format":       hyper.Scalar{V: "csv"},
+        "status":       hyper.Scalar{V: "complete"},
+        "created_at":   hyper.Scalar{V: "2025-08-10T09:00:00Z"},
+        "completed_at": hyper.Scalar{V: "2025-08-10T09:00:04Z"},
+        "record_count": hyper.Scalar{V: 142},
+    },
+    Links: []hyper.Link{
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+        {Rel: "download", Target: hyper.Target{Href: "/contacts/exports/1/file"}, Title: "Download CSV"},
+    },
+}
+```
+
+#### 16.3.5 Complete Export Job (JSON Wire Format)
+
+```json
+{
+  "kind": "export-job",
+  "self": {"href": "/contacts/exports/1"},
+  "state": {
+    "id": 1,
+    "format": "csv",
+    "status": "complete",
+    "created_at": "2025-08-10T09:00:00Z",
+    "completed_at": "2025-08-10T09:00:04Z",
+    "record_count": 142
+  },
+  "links": [
+    {"rel": "exports", "href": "/contacts/exports", "title": "All Exports"},
+    {"rel": "download", "href": "/contacts/exports/1/file", "title": "Download CSV"}
+  ]
+}
+```
+
+#### 16.3.6 CLI Interaction: Checking Export Status
+
+```
+$ cli contacts exports show 1
+Export #1
+  ID:           1
+  Format:       csv
+  Status:       complete
+  Created:      2025-08-10T09:00:00Z
+  Completed:    2025-08-10T09:00:04Z
+  Record Count: 142
+
+Navigate:
+  exports    All Exports (cli contacts exports)
+  download   Download CSV (cli contacts exports download 1)
+```
+
+#### 16.3.7 Export History Collection
+
+The `/contacts/exports` collection is a read-only log of all past exports. It has no `create` `Action` — exports are initiated via the `export` `Action` on the contact list, not by creating export resources directly.
+
+```go
+exportHistory := hyper.Representation{
+    Kind: "export-history",
+    Self: &hyper.Target{Href: "/contacts/exports"},
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+    },
+    Embedded: map[string][]hyper.Representation{
+        "items": {
+            {
+                Kind: "export-job",
+                Self: &hyper.Target{Href: "/contacts/exports/1"},
+                State: hyper.Object{
+                    "id":     hyper.Scalar{V: 1},
+                    "format": hyper.Scalar{V: "csv"},
+                    "status": hyper.Scalar{V: "complete"},
+                },
+                Links: []hyper.Link{
+                    {Rel: "self", Target: hyper.Target{Href: "/contacts/exports/1"}, Title: "Export #1"},
+                },
+            },
+        },
+    },
+}
+```
+
+#### 16.3.8 Export History (JSON Wire Format)
+
+```json
+{
+  "kind": "export-history",
+  "self": {"href": "/contacts/exports"},
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "Contacts"}
+  ],
+  "embedded": {
+    "items": [
+      {
+        "kind": "export-job",
+        "self": {"href": "/contacts/exports/1"},
+        "state": {"id": 1, "format": "csv", "status": "complete"},
+        "links": [
+          {"rel": "self", "href": "/contacts/exports/1", "title": "Export #1"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 16.3.9 CLI Interaction: Browsing Export History
+
+```
+$ cli contacts exports
+Export History
+┌────┬────────┬──────────┐
+│ ID │ Format │ Status   │
+├────┼────────┼──────────┤
+│  1 │ csv    │ complete │
+└────┴────────┴──────────┘
+
+Navigate to an export:
+  cli contacts exports show <id>
+```
+
+### 16.4 CLI Command Tree
+
+With actions and history resources discovered, the full command tree looks like this:
+
+```
+cli
+├── contacts
+│   ├── show <id>
+│   ├── create
+│   ├── archive <id>       (action on contact)
+│   ├── unarchive <id>     (action on archived contact)
+│   ├── merge              (action on collection)
+│   ├── export             (action on collection)
+│   ├── history <id>       (read-only log per contact)
+│   └── exports            (read-only log of past exports)
+└── search
+```
+
+The `archive` and `unarchive` commands come from `Actions` on individual contact `Representations`. The `merge` and `export` commands come from `Actions` on the contact list `Representation`. The `history` and `exports` subcommands come from `Links` — `history` from the per-contact `Link` with `rel: "history"`, and `exports` from the collection-level `Link` with `rel: "exports"`. The CLI maps `Action.Rel` values beyond the standard CRUD set (`create`, `update`, `delete`) to named subcommands.
+
+### 16.5 Trade-offs
+
+**Advantages:**
+
+- **Verb-oriented UX.** `cli contacts archive 1` reads naturally as an imperative command. The user thinks "archive this contact," not "create an archive resource." The CLI surface mirrors the user's intent.
+- **Fewer resources and endpoints.** Archive and merge do not require their own collection endpoints. The API has `/contacts`, `/contacts/1/archive`, `/contacts/merge`, and `/contacts/export` — no `/contacts/archives`, `/contacts/merges` collections to manage.
+- **History is separate from the operation.** You do not have to "create a merge" to merge contacts. The action happens directly; the history entry is a side effect. This keeps the primary interaction simple.
+
+**Disadvantages:**
+
+- **Non-standard `Action.Rel` values.** Actions like `archive`, `unarchive`, `merge`, and `export` do not follow the standard CRUD `Rel` vocabulary (`create`, `update`, `delete`). The CLI must handle arbitrary `Action.Rel` values — it cannot assume every `Action` maps to a known CRUD verb. The command tree construction algorithm (see [Section 7.4](#74-command-tree-construction-algorithm)) needs to treat any unrecognized `Rel` as a named subcommand.
+- **Disconnected history.** The history resources are read-only and somewhat decoupled from the actions that produce them. There is no `Link` from a history entry back to the action that created it (because the action is not a resource). In contrast, the resource-based approach in Section 15 lets you navigate from a merge record to the involved contacts.
+- **Export blurs action and resource.** The async export produces a job `Representation` that the user polls — the job itself becomes a resource with state transitions. This is the same pattern as [Section 15.4](#154-export-as-a-resource), undermining the "actions, not resources" philosophy. The distinction is that the job is a consequence of the action, not the primary interface for initiating the export.
+- **Non-uniform undo semantics.** Archive has a clean inverse (`unarchive`), but merge may be irreversible — there is no `unmerge` action. The history records what happened but cannot reverse it. In contrast, the resource-based approach can offer `DELETE` on an archive resource for undo, giving a more uniform reversal pattern.
+
+### 16.6 Spec Feedback
+
+The actions-with-history approach surfaces additional questions for the spec:
+
+- **`Action.Rel` vocabulary for domain-specific verbs.** The spec should clarify how clients handle `Action.Rel` values beyond the standard CRUD set (`create`, `update`, `delete`). Should there be a convention for domain-specific rels (e.g., prefixing with a namespace like `x-archive`), or is any string acceptable? The CLI in this section treats any unrecognized `Rel` as a named subcommand, which works but means the client cannot distinguish "standard operation" from "domain extension" without maintaining its own vocabulary list.
+
+- **`Action` producing an async result.** The export `Action` returns a job `Representation` rather than the final result. The spec has no way for an `Action` to signal that its response is an async job that should be polled. A `Hints` key like `"async": true` or a `Produces` hint specifying a job `Kind` would let clients handle this generically — e.g., a CLI could automatically poll and display progress, or a web UI could show a spinner.
+
+- **Conventions for history/audit log `Representations`.** The history collection in this section uses `Kind: "history"` with embedded `Kind: "history-entry"` items. The spec does not define conventions for audit log representations — standard `State` keys for event entries (e.g., `"event"`, `"at"`, `"by"`), or a recommended `Kind` naming pattern. Establishing lightweight conventions would help clients render history views generically without needing to understand each API's custom history schema.
+
+- **`Action` confirm hint for non-destructive operations.** The `confirm` hint (§15.6) is used here for archive, which is not destructive (it is reversible via `unarchive`). The spec should clarify that `confirm` is appropriate for any operation that warrants user confirmation, not just destructive ones. Alternatively, the spec could introduce a separate hint like `"prompt"` for non-destructive confirmations, reserving `"confirm"` for destructive actions paired with `"destructive": true`.
+
+- **State-dependent `Action` availability.** The archived contact loses its `update` and `delete` `Actions` and gains an `unarchive` `Action`. This is standard hypermedia — the server tailors affordances to current state. The spec should explicitly note that `Actions` on a `Representation` MAY change between requests as the resource's state evolves, and clients MUST NOT cache or assume a fixed set of `Actions` for a given resource.
+
+## 17. Spec Feedback
 
 After playing through the full contacts CLI scenario, the following gaps and questions emerge:
 
