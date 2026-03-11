@@ -2593,6 +2593,9 @@ list := hyper.Representation{
                     },
                 },
             },
+            Hints: map[string]any{
+                "async": true,
+            },
         },
     },
     // Embedded items omitted for brevity — same as Section 5.2
@@ -2663,7 +2666,8 @@ list := hyper.Representation{
             {"value": "json", "label": "JSON"}
           ]
         }
-      ]
+      ],
+      "hints": {"async": true}
     }
   ]
 }
@@ -2710,14 +2714,33 @@ The history entry records what was merged and what changed, providing the same a
 
 ### 16.3 Export as an Action with History
 
-Export is an `Action` on the contact list `Representation`. Since export is asynchronous, the action's response returns a `Representation` of the running export job. The history of past exports lives at `/contacts/exports` as a read-only log.
+Export is an `Action` on the contact list `Representation`. Since export is asynchronous, the action signals this via `Hints: {"async": true}` (per spec §7.2). The action's response returns a `Representation` of the running export job with `Meta.poll-interval` guiding client polling behavior. The history of past exports lives at `/contacts/exports` as a read-only log.
 
 #### 16.3.1 CLI Interaction: Exporting
 
-The `export` `Action` is discovered on the contact list (see [Section 16.2.1](#1621-contact-list-with-merge-action-server-side)). The CLI maps `Action.Rel: "export"` to a subcommand.
+The `export` `Action` is discovered on the contact list (see [Section 16.2.1](#1621-contact-list-with-merge-action-server-side)). The CLI maps `Action.Rel: "export"` to a subcommand. Because the action's `Hints` include `"async": true`, the CLI detects that the response will be an async job and automatically polls for completion.
 
 ```
 $ cli contacts export --format csv
+Exporting contacts...
+⠋ Status: pending (polling every 2s)
+⠙ Status: processing (35%)
+⠹ Status: processing (78%)
+✓ Export complete (142 records)
+
+Navigate:
+  exports    All Exports (cli contacts exports)
+  download   Download CSV (cli contacts exports download 1)
+```
+
+The CLI detects `"async": true` on the action's hints and, upon receiving the job response, reads `meta.poll-interval` to determine the polling frequency. It re-fetches the job's `Self` URL until status transitions to `"complete"` or `"failed"`. Progress percentage comes from the optional `"progress"` key in the job's `State`.
+
+Without the `"async"` hint, the CLI would display the job representation as a static result (as shown in the manual polling example below).
+
+**Manual polling fallback:** If the user prefers not to wait, `--no-poll` skips auto-polling:
+
+```
+$ cli contacts export --format csv --no-poll
 Export started.
 
   ID:     1
@@ -2745,6 +2768,9 @@ pendingJob := hyper.Representation{
     Links: []hyper.Link{
         {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
     },
+    Meta: map[string]any{
+        "poll-interval": 2,
+    },
 }
 ```
 
@@ -2762,7 +2788,10 @@ pendingJob := hyper.Representation{
   },
   "links": [
     {"rel": "exports", "href": "/contacts/exports", "title": "All Exports"}
-  ]
+  ],
+  "meta": {
+    "poll-interval": 2
+  }
 }
 ```
 
@@ -3045,7 +3074,7 @@ The actions-with-history approach surfaces additional questions for the spec:
 
 - **`"actions"` link rel for action discovery (RESOLVED).** The spec now defines (§7.1) a recommended `Link` with `rel: "actions"` that points to a resource enumerating available actions. Servers should prefer embedding actions directly in the `Representation`'s `Actions` array when possible. The `"actions"` link is an escape hatch for large or lazily-computed action sets. See [Section 16.6](#166-actions-discovery-with-the-actions-link) for the demonstration.
 
-- **`Action` producing an async result.** The export `Action` returns a job `Representation` rather than the final result. The spec has no way for an `Action` to signal that its response is an async job that should be polled. A `Hints` key like `"async": true` or a `Produces` hint specifying a job `Kind` would let clients handle this generically — e.g., a CLI could automatically poll and display progress, or a web UI could show a spinner.
+- **`Action` producing an async result (RESOLVED).** The spec now defines (§7.2) async action conventions: `Action.Hints` MAY include `"async": true` to signal that the response is an async job representation. Job representations use a `"status"` state key with recommended values (`"pending"`, `"processing"`, `"complete"`, `"failed"`), `Meta.poll-interval` for polling guidance, and dynamic `Links` for result delivery. See [Section 16.3](#163-export-as-an-action-with-history) for the demonstration.
 
 - **Conventions for history/audit log `Representations`.** The history collection in this section uses `Kind: "history"` with embedded `Kind: "history-entry"` items. The spec does not define conventions for audit log representations — standard `State` keys for event entries (e.g., `"event"`, `"at"`, `"by"`), or a recommended `Kind` naming pattern. Establishing lightweight conventions would help clients render history views generically without needing to understand each API's custom history schema.
 
@@ -3062,6 +3091,8 @@ After playing through the full contacts CLI scenario, the following gaps and que
 - **`Action.Rel` is an open vocabulary (RESOLVED).** The spec (§7.2) now clarifies that `Action.Rel` is an open string vocabulary. Well-known rels (`create`, `update`, `delete`, `search`) are recommended for CRUD; all other rels are domain-specific and require no namespace prefix. Clients treat unknown rels as opaque identifiers.
 
 - **`"actions"` link rel convention (RESOLVED).** The spec (§7.1) now defines a recommended `Link` with `rel: "actions"` for discovering available actions. Actions should be embedded directly in the `Actions` array when possible; the `"actions"` link is an escape hatch for large or lazily-computed action sets.
+
+- **Async / job-like resource conventions (RESOLVED).** The spec (§7.2) now defines async action conventions: `Action.Hints` MAY include `"async": true` to signal that the response is an async job. Job representations use a `"status"` state key with recommended values (`"pending"`, `"processing"`, `"complete"`, `"failed"`), `Meta.poll-interval` for polling guidance, dynamic `Links` for result delivery, and optional `"progress"` and `"error"` state keys. See [Section 16.3](use-cases/rest-cli.md#163-export-as-an-action-with-history) for a worked example.
 
 **Open items:**
 
@@ -3095,6 +3126,6 @@ After playing through the full contacts CLI scenario, the following gaps and que
 
 - **Multi-select field type.** The "operations as resources" pattern (Section 15) requires `Fields` that accept multiple entity IDs — e.g., selecting which contacts to archive or merge. The current `Field.Type` vocabulary has `select` for single-value selection, but no `multi-select` or equivalent for choosing multiple values from a set. The spec should consider adding a `multi-select` field type, or clarify conventions for accepting comma-separated IDs in a `text` field. Without this, servers must use `text` fields with help text explaining the expected format, which is fragile and not machine-parseable.
 
-- **Async / job-like resource conventions.** The export resource (Section 15.4) has state that transitions from `pending` to `complete`. The spec has no conventions for resources that represent asynchronous operations. Consider recommending: (1) a standard `State` key like `"status"` with well-known values (`pending`, `processing`, `complete`, `failed`); (2) a `Link` with `rel: "monitor"` or a `Hints` key like `"poll-interval"` to guide client polling behavior; (3) a convention that `Links` may appear or disappear as resource state changes (e.g., a `download` link appears only when status is `complete`). Without conventions, every API invents its own async resource patterns.
+- **Async / job-like resource conventions (RESOLVED).** The spec (§7.2) now defines async action conventions. See the resolved items above for details.
 
 - **Immutable resources.** The merge resource (Section 15.3) is intentionally immutable — it has no `update` or `delete` `Actions`. The spec does not provide a way for a server to signal that a resource is immutable. A `Hints` key like `"immutable": true` on the `Representation` (not just on `Actions`) would let clients communicate this clearly in their UI — e.g., a CLI could display "(read-only)" next to the resource, and a web UI could suppress edit buttons entirely.

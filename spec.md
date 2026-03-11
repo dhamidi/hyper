@@ -345,6 +345,69 @@ in the `Representation` as available commands or buttons. Well-known rels
 (e.g., mapping to HTTP verbs, special icons, or specific UI patterns), but
 all rels are valid and renderable.
 
+#### Async Action Conventions
+
+An `Action` MAY produce an asynchronous result — that is, the action's
+response is a job representation rather than the final result. This section
+defines lightweight conventions for signaling and handling async actions.
+
+##### Action-Level Signaling
+
+`Action.Hints` MAY include `"async": true` to signal that the action's
+response will be an async job representation rather than the final result.
+
+When `"async": true` is present, clients SHOULD expect the response to be a
+job representation with state transitions, and MAY automatically poll for
+completion.
+
+Actions without `"async": true` in `Hints` behave synchronously as before.
+This convention is opt-in and backward compatible.
+
+##### Job Representation Conventions
+
+When an action produces an async job, the response SHOULD follow these
+conventions:
+
+- **Kind**: The `Representation.Kind` SHOULD indicate a job type (e.g.,
+  `"export-job"`, or any domain-specific kind).
+- **Status state key**: The `State` object SHOULD include a `"status"` key
+  with one of: `"pending"`, `"processing"`, `"complete"`, `"failed"`.
+  APIs MAY use additional status values beyond this recommended set.
+- **Poll interval hint**: The `Representation.Meta` MAY include a
+  `"poll-interval"` key (integer, seconds) to suggest how frequently clients
+  should re-fetch the resource. The poll interval belongs on the job
+  representation, not on the action that created it, because the server
+  knows the appropriate interval based on the job's current state.
+- **Progress hint**: The `State` object MAY include a `"progress"` key
+  (number, 0-100) to indicate completion percentage.
+- **Dynamic links**: `Links` MAY appear or disappear as the job's status
+  changes. For example, a `Link` with `rel: "download"` appears only when
+  status is `"complete"`. Clients MUST NOT cache or assume a fixed set of
+  links for job representations.
+
+##### Error State
+
+When status is `"failed"`, the `State` object SHOULD include an `"error"`
+key with a human-readable error message.
+
+The job representation MAY include an `Action` with `rel: "retry"` to allow
+resubmission.
+
+##### Design Rationale
+
+- **Opt-in via Hints.** The `"async": true` hint preserves backward
+  compatibility — actions without it behave synchronously as before.
+- **Lightweight conventions, not strict schema.** The `"status"` key and
+  its values are recommended, not required.
+- **Dynamic links for result delivery.** Rather than inventing a new
+  "result" concept, the existing `Links` mechanism handles it — a
+  `download` link appears when the job completes. This is consistent with
+  the hypermedia model.
+- **No WebSocket/SSE requirement.** Polling via re-fetch is the simplest
+  pattern and works across all clients. The convention does not preclude
+  servers from offering WebSocket or SSE alternatives, but the baseline is
+  simple HTTP polling.
+
 #### Design Note
 
 An action is the core semantic primitive.
@@ -1373,3 +1436,9 @@ The following questions have been resolved:
    `rel: "actions"` MAY point to a resource enumerating available actions.
    Servers should prefer embedding actions directly in the `Representation`'s
    `Actions` array when possible.
+3. **Async action and job conventions.** Resolved in §7.2: `Action.Hints`
+   MAY include `"async": true` to signal that the response is an async job.
+   Job representations use a `"status"` state key with recommended values
+   (`"pending"`, `"processing"`, `"complete"`, `"failed"`),
+   `Meta.poll-interval` for polling guidance, and dynamic `Links` for result
+   delivery (e.g., a `download` link appears on completion).
