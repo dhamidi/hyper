@@ -50,16 +50,16 @@ The `hyper` package provides the most ergonomic path for Go servers. The package
 func handleRoot(w http.ResponseWriter, r *http.Request) {
     root := hyper.Representation{
         Kind: "root",
-        Self: &hyper.Target{Href: "/"},
+        Self: hyper.Path().Ptr(),
         Links: []hyper.Link{
-            {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+            {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
         },
         Actions: []hyper.Action{
             {
                 Name:   "Search",
                 Rel:    "search",
                 Method: "GET",
-                Target: hyper.Target{Href: "/search"},
+                Target: hyper.MustParseTarget("/search"),
                 Fields: []hyper.Field{
                     {Name: "q", Type: "text", Label: "Query"},
                 },
@@ -112,7 +112,7 @@ func validateContactInput(input ContactInput) ValidationErrors {
 func contactRepresentation(c Contact) hyper.Representation {
     return hyper.Representation{
         Kind: "contact",
-        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+        Self: hyper.Pathf("/contacts/%d", c.ID).Ptr(),
         State: hyper.Object{
             "id":    hyper.Scalar{V: c.ID},
             "name":  hyper.Scalar{V: c.Name},
@@ -120,7 +120,7 @@ func contactRepresentation(c Contact) hyper.Representation {
             "phone": hyper.Scalar{V: c.Phone},
         },
         Links: []hyper.Link{
-            {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+            {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
         },
     }
 }
@@ -128,14 +128,14 @@ func contactRepresentation(c Contact) hyper.Representation {
 func contactSummaryRepresentation(c Contact) hyper.Representation {
     return hyper.Representation{
         Kind: "contact",
-        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+        Self: hyper.Pathf("/contacts/%d", c.ID).Ptr(),
         State: hyper.Object{
             "id":    hyper.Scalar{V: c.ID},
             "name":  hyper.Scalar{V: c.Name},
             "email": hyper.Scalar{V: c.Email},
         },
         Links: []hyper.Link{
-            {Rel: "self", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)}, Title: c.Name},
+            {Rel: "self", Target: hyper.Pathf("/contacts/%d", c.ID), Title: c.Name},
         },
     }
 }
@@ -155,13 +155,13 @@ func createContactFormRepresentation(input ContactInput, fieldErrors ValidationE
 
     return hyper.Representation{
         Kind: "contact-form",
-        Self: &hyper.Target{Href: "/contacts"},
+        Self: hyper.MustParseTarget("/contacts").Ptr(),
         Actions: []hyper.Action{
             {
                 Name:     "Create Contact",
                 Rel:      "create",
                 Method:   "POST",
-                Target:   hyper.Target{Href: "/contacts"},
+                Target:   hyper.MustParseTarget("/contacts"),
                 Consumes: []string{"application/vnd.api+json"},
                 Fields:   fields,
             },
@@ -193,16 +193,16 @@ func handleContactList(w http.ResponseWriter, r *http.Request) {
 
     list := hyper.Representation{
         Kind: "contact-list",
-        Self: &hyper.Target{Href: "/contacts"},
+        Self: hyper.MustParseTarget("/contacts").Ptr(),
         Links: []hyper.Link{
-            {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+            {Rel: "root", Target: hyper.Path(), Title: "Home"},
         },
         Actions: []hyper.Action{
             {
                 Name:     "Create Contact",
                 Rel:      "create",
                 Method:   "POST",
-                Target:   hyper.Target{Href: "/contacts"},
+                Target:   hyper.MustParseTarget("/contacts"),
                 Consumes: []string{"application/vnd.api+json"},
                 Fields: []hyper.Field{
                     {Name: "name", Type: "text", Label: "Name", Required: true},
@@ -239,14 +239,14 @@ func handleContact(w http.ResponseWriter, r *http.Request) {
 
     // Add links and actions specific to the detail view
     rep.Links = append(rep.Links,
-        hyper.Link{Rel: "notes", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d/notes", c.ID)}, Title: "Notes"},
+        hyper.Link{Rel: "notes", Target: hyper.Pathf("/contacts/%d/notes", c.ID), Title: "Notes"},
     )
     rep.Actions = []hyper.Action{
         {
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Target:   hyper.Pathf("/contacts/%d", c.ID),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: c.Name, Required: true},
@@ -258,7 +258,7 @@ func handleContact(w http.ResponseWriter, r *http.Request) {
             Name:   "Delete Contact",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Target: hyper.Pathf("/contacts/%d", c.ID),
             Hints: map[string]any{
                 "confirm":     fmt.Sprintf("Are you sure you want to delete %s?", c.Name),
                 "destructive": true,
@@ -577,10 +577,10 @@ Server change — add a link to the contact representation:
 ```go
 // Add one link to the existing contact handler
 Links: []hyper.Link{
-    {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-    {Rel: "notes", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d/notes", c.ID)}, Title: "Notes"},
+    {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
+    {Rel: "notes", Target: hyper.Pathf("/contacts/%d/notes", c.ID), Title: "Notes"},
     // New: tags link
-    {Rel: "tags", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d/tags", c.ID)}, Title: "Tags"},
+    {Rel: "tags", Target: hyper.Pathf("/contacts/%d/tags", c.ID), Title: "Tags"},
 },
 ```
 
@@ -595,7 +595,7 @@ func handleContactTags(w http.ResponseWriter, r *http.Request) {
     for i, t := range tags {
         items[i] = hyper.Representation{
             Kind: "tag",
-            Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d/tags/%s", id, t.Slug)},
+            Self: hyper.Pathf("/contacts/%d/tags/%s", id, t.Slug).Ptr(),
             State: hyper.Object{
                 "name":  hyper.Scalar{V: t.Name},
                 "color": hyper.Scalar{V: t.Color},
@@ -605,16 +605,16 @@ func handleContactTags(w http.ResponseWriter, r *http.Request) {
 
     rep := hyper.Representation{
         Kind: "tag-list",
-        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d/tags", id)},
+        Self: hyper.Pathf("/contacts/%d/tags", id).Ptr(),
         Links: []hyper.Link{
-            {Rel: "contact", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", id)}, Title: "Back to Contact"},
+            {Rel: "contact", Target: hyper.Pathf("/contacts/%d", id), Title: "Back to Contact"},
         },
         Actions: []hyper.Action{
             {
                 Name:     "Add Tag",
                 Rel:      "create",
                 Method:   "POST",
-                Target:   hyper.Target{Href: fmt.Sprintf("/contacts/%d/tags", id)},
+                Target:   hyper.Pathf("/contacts/%d/tags", id),
                 Consumes: []string{"application/vnd.api+json"},
                 Fields: []hyper.Field{
                     {Name: "name", Type: "text", Label: "Tag Name", Required: true},
@@ -688,7 +688,7 @@ func contactActions(c Contact, user User) []hyper.Action {
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Target:   hyper.Pathf("/contacts/%d", c.ID),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: c.Name, Required: true},
@@ -703,7 +703,7 @@ func contactActions(c Contact, user User) []hyper.Action {
             Name:   "Delete Contact",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Target: hyper.Pathf("/contacts/%d", c.ID),
             Hints:  map[string]any{"confirm": fmt.Sprintf("Delete %s?", c.Name), "destructive": true},
         })
     }
@@ -726,7 +726,7 @@ action := hyper.Action{
     Name:   "Delete Contact",
     Rel:    "delete",
     Method: "DELETE",
-    Target: hyper.Target{Href: "/contacts/1"},
+    Target: hyper.MustParseTarget("/contacts/1"),
     Hints: map[string]any{
         "confirm":     "Are you sure you want to delete Ada Lovelace?",
         "destructive": true,
@@ -770,16 +770,16 @@ When a collection has no items, the server returns an empty `Embedded` slot:
 ```go
 list := hyper.Representation{
     Kind: "contact-list",
-    Self: &hyper.Target{Href: "/contacts"},
+    Self: hyper.MustParseTarget("/contacts").Ptr(),
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Create Contact",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts"},
+            Target:   hyper.MustParseTarget("/contacts"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Required: true},
@@ -850,7 +850,7 @@ func renderError(w http.ResponseWriter, r *http.Request, status int, message str
             "message": hyper.Scalar{V: message},
         },
         Links: []hyper.Link{
-            {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+            {Rel: "root", Target: hyper.Path(), Title: "Home"},
         },
     }
 
@@ -900,7 +900,7 @@ contact := hyper.Representation{
 }
 ```
 
-The `Resolver` (§8.1) resolves `RouteRef` values to `Href` strings before encoding. On the wire, only `Href` appears:
+The `Resolver` (§8.2) resolves `RouteRef` values to `*url.URL` values before encoding. On the wire, only `href` strings appear:
 
 ```json
 {
@@ -953,7 +953,7 @@ deleted := hyper.Representation{
         "message": hyper.Scalar{V: "Contact deleted"},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
     },
 }
 
@@ -1029,3 +1029,5 @@ The following items surfaced while writing this server-side exploration:
 - **`RouteRef` should be emphasized as server-internal (never on the wire).** The spec defines `RouteRef` (§8.1) but does not explicitly state that it MUST NOT appear in encoded output. Third-party implementers in other languages need to know that `RouteRef` is a Go-side convenience, not part of the interoperability contract.
 
 - **Portable compliance test suite would strengthen the interoperability story.** The TypeScript example in Section 5 demonstrates that any language can produce CLI-compatible responses, but there is no way to verify compliance. A test suite that validates JSON documents against the wire format schema would let server authors in any language confirm compatibility.
+
+- **`Target.URL` (`*url.URL`) and convenience constructors improve ergonomics.** The spec now defines `Target.URL` as `*url.URL` instead of the original `string` `Href` field (§8.1), along with `Path`, `Pathf`, `MustParseTarget`, and `ParseTarget` constructors. This document's examples have been updated to use these constructors throughout. The wire format (§13.3.6) is unchanged — `url.URL` serializes to the same `{"href": "..."}` string.

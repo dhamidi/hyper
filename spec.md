@@ -478,7 +478,7 @@ SHOULD be treated as `text` by codecs that do not recognize them.
 
 ```go
 type Target struct {
-    Href  string
+    URL   *url.URL
     Route *RouteRef
 }
 
@@ -490,15 +490,53 @@ type RouteRef struct {
 
 ### 8.1.1 Requirements
 
-- Exactly one of `Href` or `Route` SHOULD be set
-- `Href` SHALL represent a directly specified target
+- Exactly one of `URL` or `Route` SHOULD be set
+- `URL` SHALL represent a directly specified target
 - `Route` SHALL represent an abstract, named route target
+
+### 8.1.2 Convenience Constructors
+
+The library SHALL provide convenience constructors for common URL construction
+patterns:
+
+```go
+// Path constructs a Target from path segments.
+// Each segment is path-escaped individually.
+//
+//   hyper.Path("contacts", "42")        → /contacts/42
+//   hyper.Path("contacts", id, "notes") → /contacts/{id}/notes
+//   hyper.Path()                        → /
+func Path(segments ...string) Target
+
+// Pathf constructs a Target from a format string.
+// The format string is processed with fmt.Sprintf, then parsed as a URL path.
+//
+//   hyper.Pathf("/contacts/%d", c.ID)   → /contacts/42
+func Pathf(format string, args ...any) Target
+
+// ParseTarget parses a raw URL string into a Target.
+// Returns an error if the URL is malformed.
+func ParseTarget(rawURL string) (Target, error)
+
+// MustParseTarget is like ParseTarget but panics on error.
+// Suitable for static URLs known at compile time.
+//
+//   hyper.MustParseTarget("/contacts")
+func MustParseTarget(rawURL string) Target
+```
+
+A `Ptr` method SHALL be provided to obtain a pointer to a `Target`, for use
+in fields typed `*Target` (e.g. `Representation.Self`):
+
+```go
+func (t Target) Ptr() *Target
+```
 
 ### 8.2 Resolver
 
 ```go
 type Resolver interface {
-    ResolveTarget(context.Context, Target) (string, error)
+    ResolveTarget(context.Context, Target) (*url.URL, error)
 }
 ```
 
@@ -506,7 +544,7 @@ type Resolver interface {
 
 A resolver SHALL:
 
-1. return `Href` directly when present
+1. return `URL` directly when present
 2. resolve `Route` when present
 3. fail when neither form is present
 
@@ -767,7 +805,8 @@ top-level structure recursively).
 
 In JSON output, targets SHALL be represented as resolved URL strings under
 the `href` key. The `self` field SHALL be encoded as
-`{"href": "<resolved-url>"}` or omitted when absent.
+`{"href": "<resolved-url>"}` or omitted when absent. The `Target.URL` field
+(a `*url.URL`) SHALL be serialized to its string form via `URL.String()`.
 
 #### 13.3.7 Divergence from Existing Formats
 
@@ -905,7 +944,7 @@ func (a *App) NewContact(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        location, err := a.Resolver.ResolveTarget(r.Context(), hyper.Target{
+        resolved, err := a.Resolver.ResolveTarget(r.Context(), hyper.Target{
             Route: &hyper.RouteRef{
                 Name: "contacts.show",
                 Params: map[string]string{"id": strconv.FormatInt(contact.ID, 10)},
@@ -916,7 +955,7 @@ func (a *App) NewContact(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        http.Redirect(w, r, location, http.StatusSeeOther)
+        http.Redirect(w, r, resolved.String(), http.StatusSeeOther)
         return
     }
 }
@@ -947,17 +986,17 @@ have no meaningful `State`.
 ```go
 rep := hyper.Representation{
     Kind: "root",
-    Self: &hyper.Target{Href: "/"},
+    Self: hyper.Path().Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
-        {Rel: "settings", Target: hyper.Target{Href: "/settings"}, Title: "Settings"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
+        {Rel: "settings", Target: hyper.MustParseTarget("/settings"), Title: "Settings"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Search",
             Rel:    "search",
             Method: "GET",
-            Target: hyper.Target{Href: "/search"},
+            Target: hyper.MustParseTarget("/search"),
             Fields: []hyper.Field{
                 {Name: "q", Type: "text", Label: "Query"},
             },
@@ -992,14 +1031,18 @@ type DispatchResolver struct {
     }
 }
 
-func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (string, error) {
-    if t.Href != "" {
-        return t.Href, nil
+func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (*url.URL, error) {
+    if t.URL != nil {
+        return t.URL, nil
     }
     if t.Route == nil {
-        return "", errors.New("hyper: missing target")
+        return nil, errors.New("hyper: missing target")
     }
-    return r.Router.Path(t.Route.Name, dispatch.Params(t.Route.Params))
+    s, err := r.Router.Path(t.Route.Name, dispatch.Params(t.Route.Params))
+    if err != nil {
+        return nil, err
+    }
+    return url.Parse(s)
 }
 ```
 
@@ -1008,30 +1051,30 @@ func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (stri
 **How do I use `hyper.Target` with the standard library's `http.ServeMux`,
 which does not support reverse routing?**
 
-Because `ServeMux` has no named routes, use direct `Href` targets instead
+Because `ServeMux` has no named routes, use direct `URL` targets instead
 of `RouteRef`:
 
 ```go
-// HrefResolver resolves targets that carry a direct Href.
+// URLResolver resolves targets that carry a direct URL.
 // It returns an error for RouteRef targets because ServeMux
 // does not support reverse routing.
-type HrefResolver struct{}
+type URLResolver struct{}
 
-func (HrefResolver) ResolveTarget(_ context.Context, t hyper.Target) (string, error) {
-    if t.Href != "" {
-        return t.Href, nil
+func (URLResolver) ResolveTarget(_ context.Context, t hyper.Target) (*url.URL, error) {
+    if t.URL != nil {
+        return t.URL, nil
     }
-    return "", errors.New("hyper: ServeMux does not support named routes")
+    return nil, errors.New("hyper: ServeMux does not support named routes")
 }
 ```
 
-Build representations with `Href`-based targets:
+Build representations with `URL`-based targets:
 
 ```go
 func contactHandler(w http.ResponseWriter, r *http.Request) {
     rep := hyper.Representation{
         Kind: "contact",
-        Self: &hyper.Target{Href: "/contacts/42"},
+        Self: hyper.Path("contacts", "42").Ptr(),
         State: hyper.Object{
             "name": hyper.Scalar{V: "Ada"},
         },
@@ -1040,7 +1083,7 @@ func contactHandler(w http.ResponseWriter, r *http.Request) {
                 Name:   "Save",
                 Rel:    "update",
                 Method: "PUT",
-                Target: hyper.Target{Href: "/contacts/42"},
+                Target: hyper.Path("contacts", "42"),
                 Fields: []hyper.Field{
                     {Name: "name", Type: "text", Value: "Ada", Required: true},
                 },
@@ -1066,7 +1109,7 @@ action := hyper.Action{
     Name:   "Save Email",
     Rel:    "update-email",
     Method: "PUT",
-    Target: hyper.Target{Href: "/contacts/42/email"},
+    Target: hyper.Path("contacts", "42", "email"),
     Fields: []hyper.Field{
         {Name: "email", Type: "email", Value: "ada@example.com", Required: true},
     },
@@ -1107,7 +1150,7 @@ Use `Meta` or `Hints` to carry Turbo Frame IDs and Stimulus annotations:
 ```go
 rep := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/42"},
+    Self: hyper.Path("contacts", "42").Ptr(),
     State: hyper.Object{
         "name": hyper.Scalar{V: "Ada"},
     },
@@ -1118,7 +1161,7 @@ rep := hyper.Representation{
         {
             Name:   "Save",
             Method: "PUT",
-            Target: hyper.Target{Href: "/contacts/42"},
+            Target: hyper.Path("contacts", "42"),
             Hints: map[string]any{
                 "data-controller": "form",
                 "data-action":     "submit->form#save",
@@ -1218,7 +1261,7 @@ action := hyper.Action{
     Name:   "Delete Contact",
     Rel:    "delete",
     Method: "DELETE",
-    Target: hyper.Target{Href: "/contacts/42"},
+    Target: hyper.Path("contacts", "42"),
     Hints: map[string]any{
         "confirm":     "Are you sure you want to delete this contact?",
         "destructive": true,

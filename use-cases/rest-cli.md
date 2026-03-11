@@ -37,16 +37,16 @@ The server builds the root `Representation` using `hyper` types:
 ```go
 root := hyper.Representation{
     Kind: "root",
-    Self: &hyper.Target{Href: "/"},
+    Self: hyper.Path().Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Search",
             Rel:    "search",
             Method: "GET",
-            Target: hyper.Target{Href: "/search"},
+            Target: hyper.MustParseTarget("/search"),
             Fields: []hyper.Field{
                 {Name: "q", Type: "text", Label: "Query"},
             },
@@ -179,16 +179,16 @@ When the user runs `cli contacts`, the client follows the `contacts` link discov
 ```go
 list := hyper.Representation{
     Kind: "contact-list",
-    Self: &hyper.Target{Href: "/contacts"},
+    Self: hyper.MustParseTarget("/contacts").Ptr(),
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Create Contact",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts"},
+            Target:   hyper.MustParseTarget("/contacts"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Required: true},
@@ -201,26 +201,26 @@ list := hyper.Representation{
         "items": {
             {
                 Kind: "contact",
-                Self: &hyper.Target{Href: "/contacts/1"},
+                Self: hyper.MustParseTarget("/contacts/1").Ptr(),
                 State: hyper.Object{
                     "id":    hyper.Scalar{V: 1},
                     "name":  hyper.Scalar{V: "Ada Lovelace"},
                     "email": hyper.Scalar{V: "ada@example.com"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/1"), Title: "Ada Lovelace"},
                 },
             },
             {
                 Kind: "contact",
-                Self: &hyper.Target{Href: "/contacts/2"},
+                Self: hyper.MustParseTarget("/contacts/2").Ptr(),
                 State: hyper.Object{
                     "id":    hyper.Scalar{V: 2},
                     "name":  hyper.Scalar{V: "Grace Hopper"},
                     "email": hyper.Scalar{V: "grace@example.com"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/2"}, Title: "Grace Hopper"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/2"), Title: "Grace Hopper"},
                 },
             },
         },
@@ -309,7 +309,7 @@ When the user runs `cli contacts show 1`, the client resolves the `Self` target 
 ```go
 contact := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/1"},
+    Self: hyper.MustParseTarget("/contacts/1").Ptr(),
     State: hyper.Object{
         "id":    hyper.Scalar{V: 1},
         "name":  hyper.Scalar{V: "Ada Lovelace"},
@@ -321,14 +321,14 @@ contact := hyper.Representation{
         },
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: "/contacts/1"},
+            Target:   hyper.MustParseTarget("/contacts/1"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
@@ -340,7 +340,7 @@ contact := hyper.Representation{
             Name:   "Delete Contact",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: "/contacts/1"},
+            Target: hyper.MustParseTarget("/contacts/1"),
             Hints: map[string]any{
                 "confirm":     "Are you sure you want to delete Ada Lovelace?",
                 "destructive": true,
@@ -425,22 +425,22 @@ When the server returns a single contact `Representation`, it can expose `Links`
 ```go
 contact := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/1"},
+    Self: hyper.MustParseTarget("/contacts/1").Ptr(),
     State: hyper.Object{
         "id":   hyper.Scalar{V: 1},
         "name": hyper.Scalar{V: "Ada Lovelace"},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-        {Rel: "notes", Target: hyper.Target{Href: "/contacts/1/notes"}, Title: "Notes"},
-        {Rel: "tags", Target: hyper.Target{Href: "/contacts/1/tags"}, Title: "Tags"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
+        {Rel: "notes", Target: hyper.MustParseTarget("/contacts/1/notes"), Title: "Notes"},
+        {Rel: "tags", Target: hyper.MustParseTarget("/contacts/1/tags"), Title: "Tags"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: "/contacts/1"},
+            Target:   hyper.MustParseTarget("/contacts/1"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
@@ -451,7 +451,7 @@ contact := hyper.Representation{
             Name:   "Delete Contact",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: "/contacts/1"},
+            Target: hyper.MustParseTarget("/contacts/1"),
             Hints:  map[string]any{"confirm": "Are you sure you want to delete Ada Lovelace?", "destructive": true},
         },
     },
@@ -520,16 +520,16 @@ When the user runs `cli contacts 1 notes`, the CLI follows the `notes` link from
 ```go
 notesList := hyper.Representation{
     Kind: "note-list",
-    Self: &hyper.Target{Href: "/contacts/1/notes"},
+    Self: hyper.MustParseTarget("/contacts/1/notes").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contact", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+        {Rel: "contact", Target: hyper.MustParseTarget("/contacts/1"), Title: "Ada Lovelace"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Add Note",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/1/notes"},
+            Target:   hyper.MustParseTarget("/contacts/1/notes"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "title", Type: "text", Label: "Title", Required: true},
@@ -541,26 +541,26 @@ notesList := hyper.Representation{
         "items": {
             {
                 Kind: "note",
-                Self: &hyper.Target{Href: "/contacts/1/notes/3"},
+                Self: hyper.MustParseTarget("/contacts/1/notes/3").Ptr(),
                 State: hyper.Object{
                     "id":      hyper.Scalar{V: 3},
                     "title":   hyper.Scalar{V: "Meeting notes"},
                     "created": hyper.Scalar{V: "2025-11-20"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/1/notes/3"}, Title: "Meeting notes"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/1/notes/3"), Title: "Meeting notes"},
                 },
             },
             {
                 Kind: "note",
-                Self: &hyper.Target{Href: "/contacts/1/notes/7"},
+                Self: hyper.MustParseTarget("/contacts/1/notes/7").Ptr(),
                 State: hyper.Object{
                     "id":      hyper.Scalar{V: 7},
                     "title":   hyper.Scalar{V: "Follow-up tasks"},
                     "created": hyper.Scalar{V: "2025-12-03"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/1/notes/7"}, Title: "Follow-up tasks"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/1/notes/7"), Title: "Follow-up tasks"},
                 },
             },
         },
@@ -647,7 +647,7 @@ When the user runs `cli contacts 1 notes 3`, the CLI resolves the `Self` target 
 ```go
 note := hyper.Representation{
     Kind: "note",
-    Self: &hyper.Target{Href: "/contacts/1/notes/3"},
+    Self: hyper.MustParseTarget("/contacts/1/notes/3").Ptr(),
     State: hyper.Object{
         "id":      hyper.Scalar{V: 3},
         "title":   hyper.Scalar{V: "Meeting notes"},
@@ -658,15 +658,15 @@ note := hyper.Representation{
         },
     },
     Links: []hyper.Link{
-        {Rel: "notes", Target: hyper.Target{Href: "/contacts/1/notes"}, Title: "All Notes"},
-        {Rel: "contact", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+        {Rel: "notes", Target: hyper.MustParseTarget("/contacts/1/notes"), Title: "All Notes"},
+        {Rel: "contact", Target: hyper.MustParseTarget("/contacts/1"), Title: "Ada Lovelace"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Edit Note",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: "/contacts/1/notes/3"},
+            Target:   hyper.MustParseTarget("/contacts/1/notes/3"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "title", Type: "text", Label: "Title", Value: "Meeting notes", Required: true},
@@ -677,7 +677,7 @@ note := hyper.Representation{
             Name:   "Delete Note",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: "/contacts/1/notes/3"},
+            Target: hyper.MustParseTarget("/contacts/1/notes/3"),
             Hints:  map[string]any{"confirm": "Delete this note?", "destructive": true},
         },
     },
@@ -749,9 +749,9 @@ The note `Representation` carries its own `Links` back to the notes list and the
 The CLI uses a single recursive algorithm for every navigation step:
 
 1. **Fetch** the current `Representation` from the server
-2. **For each `Link`**, register a navigable subcommand named after `Link.Rel`. When the user invokes it, follow `Link.Target.Href` and recurse from step 1
+2. **For each `Link`**, register a navigable subcommand named after `Link.Rel`. When the user invokes it, follow `Link.Target.URL` and recurse from step 1
 3. **For each `Action`**, register an executable command named after `Action.Rel`. Generate flags from `Action.Fields` — `Field.Name` becomes the flag name, `Field.Required` determines whether it is mandatory, `Field.Value` provides the default, and `Field.Type` drives validation
-4. **For `Embedded` items** with `Self` targets, register `show <id>` subcommands. When the user invokes one, fetch the `Self.Href` and recurse from step 1
+4. **For `Embedded` items** with `Self` targets, register `show <id>` subcommands. When the user invokes one, fetch `Self.URL` and recurse from step 1
 
 In pseudocode:
 
@@ -762,7 +762,7 @@ func buildCommands(rep hyper.Representation) *CommandGroup {
     // Links become navigable subcommands
     for _, link := range rep.Links {
         group.AddSubcommand(link.Rel, link.Title, func() {
-            next := fetch(link.Target.Href)
+            next := fetch(link.Target.URL)
             buildCommands(next)  // recurse
         })
     }
@@ -784,7 +784,7 @@ func buildCommands(rep hyper.Representation) *CommandGroup {
             if item.Self != nil {
                 id := item.State["id"]
                 group.AddSubcommand("show "+id.String(), item.Kind, func() {
-                    next := fetch(item.Self.Href)
+                    next := fetch(item.Self.URL)
                     buildCommands(next)  // recurse
                 })
             }
@@ -799,7 +799,7 @@ The critical insight: the CLI never hard-codes nesting depth. Whether the user n
 
 ### 7.5 Breadcrumb / Path Display
 
-The interactive REPL prompt reflects nesting depth using the `Representation.Kind` and `Self.Href` at each level. As the user navigates deeper, the prompt updates to show the current position in the resource hierarchy:
+The interactive REPL prompt reflects nesting depth using the `Representation.Kind` and `Self.URL` at each level. As the user navigates deeper, the prompt updates to show the current position in the resource hierarchy:
 
 ```
 root> contacts
@@ -815,7 +815,7 @@ root>
 
 Each prompt segment is derived from the current `Representation`:
 - `Kind` provides the human-readable context type (e.g., `note-list`)
-- `Self.Href` provides the path (e.g., `/contacts/1/notes`)
+- `Self.URL` provides the path (e.g., `/contacts/1/notes`)
 - `back` pops the navigation stack and returns to the previous `Representation`
 
 ### 7.6 CLI Output for Nested Resources
@@ -945,7 +945,7 @@ The CLI:
 ```go
 results := hyper.Representation{
     Kind: "search-results",
-    Self: &hyper.Target{Href: "/search?q=Ada"},
+    Self: hyper.MustParseTarget("/search?q=Ada").Ptr(),
     State: hyper.Object{
         "query": hyper.Scalar{V: "Ada"},
     },
@@ -953,7 +953,7 @@ results := hyper.Representation{
         "items": {
             {
                 Kind: "contact",
-                Self: &hyper.Target{Href: "/contacts/1"},
+                Self: hyper.MustParseTarget("/contacts/1").Ptr(),
                 State: hyper.Object{
                     "id":    hyper.Scalar{V: 1},
                     "name":  hyper.Scalar{V: "Ada Lovelace"},
@@ -1156,13 +1156,13 @@ When the server returns `422 Unprocessable Entity`, it includes a `Representatio
 ```go
 validationRep := hyper.Representation{
     Kind: "contact-form",
-    Self: &hyper.Target{Href: "/contacts"},
+    Self: hyper.MustParseTarget("/contacts").Ptr(),
     Actions: []hyper.Action{
         {
             Name:     "Create Contact",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts"},
+            Target:   hyper.MustParseTarget("/contacts"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "", Required: true, Error: "Name is required"},
@@ -1229,7 +1229,7 @@ When the CLI connects without stored credentials, the server returns a root `Rep
 ```go
 root := hyper.Representation{
     Kind: "root",
-    Self: &hyper.Target{Href: "/"},
+    Self: hyper.Path().Ptr(),
     Links: []hyper.Link{
         // No "contacts" link — requires auth
     },
@@ -1238,7 +1238,7 @@ root := hyper.Representation{
             Name:   "Login",
             Rel:    "login",
             Method: "POST",
-            Target: hyper.Target{Href: "/auth/login"},
+            Target: hyper.MustParseTarget("/auth/login"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "username", Type: "text", Label: "Username", Required: true},
@@ -1289,7 +1289,7 @@ The user authenticates with `cli login --username ada --password secret`:
 
 1. The CLI finds the `login` `Action` on the root `Representation` by matching `Action.Rel == "login"`
 2. `Field.Type: "password"` triggers masked input if the `--password` flag is omitted — the CLI prompts interactively without echoing characters
-3. The CLI submits credentials to the action's `Target.Href` (`/auth/login`) using the method (`POST`) and content type specified in `Action.Consumes` (`application/vnd.api+json`)
+3. The CLI submits credentials to the action's `Target.URL` (`/auth/login`) using the method (`POST`) and content type specified in `Action.Consumes` (`application/vnd.api+json`)
 4. The server validates credentials and returns a response `Representation` with a token
 5. The CLI stores the credential locally (e.g., `~/.config/cli/credentials.json`)
 6. The CLI re-fetches the root representation with the stored credential in an `Authorization` header, revealing new links and actions
@@ -1304,7 +1304,7 @@ loginResult := hyper.Representation{
         "expires_at": hyper.Scalar{V: "2026-04-01T00:00:00Z"},
     },
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
     },
 }
 ```
@@ -1333,20 +1333,20 @@ After login, the CLI re-fetches the root with `Authorization: Bearer eyJhbGci...
 ```go
 root := hyper.Representation{
     Kind: "root",
-    Self: &hyper.Target{Href: "/"},
+    Self: hyper.Path().Ptr(),
     State: hyper.Object{
         "user": hyper.Scalar{V: "ada"},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
-        {Rel: "profile", Target: hyper.Target{Href: "/profile"}, Title: "My Profile"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
+        {Rel: "profile", Target: hyper.MustParseTarget("/profile"), Title: "My Profile"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Search",
             Rel:    "search",
             Method: "GET",
-            Target: hyper.Target{Href: "/search"},
+            Target: hyper.MustParseTarget("/search"),
             Fields: []hyper.Field{
                 {Name: "q", Type: "text", Label: "Query"},
             },
@@ -1355,7 +1355,7 @@ root := hyper.Representation{
             Name:   "Logout",
             Rel:    "logout",
             Method: "POST",
-            Target: hyper.Target{Href: "/auth/logout"},
+            Target: hyper.MustParseTarget("/auth/logout"),
             Hints: map[string]any{
                 "confirm": "Are you sure you want to log out?",
             },
@@ -1445,7 +1445,7 @@ unauthorized := hyper.Representation{
             Name:   "Login",
             Rel:    "login",
             Method: "POST",
-            Target: hyper.Target{Href: "/auth/login"},
+            Target: hyper.MustParseTarget("/auth/login"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "username", Type: "text", Label: "Username", Required: true},
@@ -1500,14 +1500,14 @@ loginResult := hyper.Representation{
         "expires_at": hyper.Scalar{V: "2026-04-01T00:00:00Z"},
     },
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Refresh Token",
             Rel:    "refresh",
             Method: "POST",
-            Target: hyper.Target{Href: "/auth/refresh"},
+            Target: hyper.MustParseTarget("/auth/refresh"),
         },
     },
 }
@@ -1560,7 +1560,7 @@ This use case exercises the following `hyper` types:
 | `Action` | All mutations (`create`, `update`, `delete`) and parameterized queries (`search`). Actions on nested resources (e.g., "Add Note", "Edit Note") work identically to top-level actions |
 | `Field` | Flag generation, validation, completion candidates, default values |
 | `Option` | Enum completion candidates (not shown in contacts but supported for `select` fields) |
-| `Target` with `Href` | Resolved URLs from JSON codec (§13.3.6) |
+| `Target` with `URL` | Resolved URLs from JSON codec (§13.3.6) |
 | `Embedded` representations | Collection items in list and search results (§6.1). `Embedded` representations within nested resources carry their own full hypermedia controls — `Links`, `Actions`, and `Self` targets — enabling recursive navigation at every level |
 | `Node` (`Object`) | Contact and note state as key-value pairs |
 | `Value` (`Scalar`, `RichText`) | Primitive fields, bio content, and note body content |
@@ -1584,19 +1584,19 @@ The contacts list `Representation` gains `Links` to the sub-resource collections
 ```go
 list := hyper.Representation{
     Kind: "contact-list",
-    Self: &hyper.Target{Href: "/contacts"},
+    Self: hyper.MustParseTarget("/contacts").Ptr(),
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
-        {Rel: "archives", Target: hyper.Target{Href: "/contacts/archives"}, Title: "Archives"},
-        {Rel: "merges", Target: hyper.Target{Href: "/contacts/merges"}, Title: "Merges"},
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "Exports"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
+        {Rel: "archives", Target: hyper.MustParseTarget("/contacts/archives"), Title: "Archives"},
+        {Rel: "merges", Target: hyper.MustParseTarget("/contacts/merges"), Title: "Merges"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "Exports"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Create Contact",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts"},
+            Target:   hyper.MustParseTarget("/contacts"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Required: true},
@@ -1647,16 +1647,16 @@ An archive is a first-class resource. Creating an archive moves the specified co
 ```go
 archives := hyper.Representation{
     Kind: "archive-list",
-    Self: &hyper.Target{Href: "/contacts/archives"},
+    Self: hyper.MustParseTarget("/contacts/archives").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Archive Contacts",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/archives"},
+            Target:   hyper.MustParseTarget("/contacts/archives"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {
@@ -1673,14 +1673,14 @@ archives := hyper.Representation{
         "items": {
             {
                 Kind: "archive",
-                Self: &hyper.Target{Href: "/contacts/archives/1"},
+                Self: hyper.MustParseTarget("/contacts/archives/1").Ptr(),
                 State: hyper.Object{
                     "id":         hyper.Scalar{V: 1},
                     "created_at": hyper.Scalar{V: "2025-06-15T10:30:00Z"},
                     "contacts":   hyper.Scalar{V: "Ada Lovelace, Grace Hopper"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/archives/1"}, Title: "Archive #1"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/archives/1"), Title: "Archive #1"},
                 },
             },
         },
@@ -1741,7 +1741,7 @@ The individual archive resource carries a `delete` `Action` with a `confirm` hin
 ```go
 archive := hyper.Representation{
     Kind: "archive",
-    Self: &hyper.Target{Href: "/contacts/archives/1"},
+    Self: hyper.MustParseTarget("/contacts/archives/1").Ptr(),
     State: hyper.Object{
         "id":          hyper.Scalar{V: 1},
         "created_at":  hyper.Scalar{V: "2025-06-15T10:30:00Z"},
@@ -1749,15 +1749,15 @@ archive := hyper.Representation{
         "contacts":    hyper.Scalar{V: "Ada Lovelace, Grace Hopper"},
     },
     Links: []hyper.Link{
-        {Rel: "archives", Target: hyper.Target{Href: "/contacts/archives"}, Title: "All Archives"},
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "archives", Target: hyper.MustParseTarget("/contacts/archives"), Title: "All Archives"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Restore Contacts",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: "/contacts/archives/1"},
+            Target: hyper.MustParseTarget("/contacts/archives/1"),
             Hints: map[string]any{
                 "confirm": "This will restore 2 contacts and remove this archive. Continue?",
             },
@@ -1813,16 +1813,16 @@ A merge records which contacts were combined and what the result was. The merge 
 ```go
 merges := hyper.Representation{
     Kind: "merge-list",
-    Self: &hyper.Target{Href: "/contacts/merges"},
+    Self: hyper.MustParseTarget("/contacts/merges").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Merge Contacts",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/merges"},
+            Target:   hyper.MustParseTarget("/contacts/merges"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {
@@ -1846,7 +1846,7 @@ merges := hyper.Representation{
         "items": {
             {
                 Kind: "merge",
-                Self: &hyper.Target{Href: "/contacts/merges/1"},
+                Self: hyper.MustParseTarget("/contacts/merges/1").Ptr(),
                 State: hyper.Object{
                     "id":         hyper.Scalar{V: 1},
                     "created_at": hyper.Scalar{V: "2025-07-01T14:00:00Z"},
@@ -1854,7 +1854,7 @@ merges := hyper.Representation{
                     "sources":    hyper.Scalar{V: "Grace Hopper (#2), Charles Babbage (#3)"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/merges/1"}, Title: "Merge #1"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/merges/1"), Title: "Merge #1"},
                 },
             },
         },
@@ -1923,7 +1923,7 @@ The merge resource provides a detailed audit record. It has no mutation `Actions
 ```go
 merge := hyper.Representation{
     Kind: "merge",
-    Self: &hyper.Target{Href: "/contacts/merges/1"},
+    Self: hyper.MustParseTarget("/contacts/merges/1").Ptr(),
     State: hyper.Object{
         "id":         hyper.Scalar{V: 1},
         "created_at": hyper.Scalar{V: "2025-07-01T14:00:00Z"},
@@ -1936,8 +1936,8 @@ merge := hyper.Representation{
         },
     },
     Links: []hyper.Link{
-        {Rel: "merges", Target: hyper.Target{Href: "/contacts/merges"}, Title: "All Merges"},
-        {Rel: "target", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+        {Rel: "merges", Target: hyper.MustParseTarget("/contacts/merges"), Title: "All Merges"},
+        {Rel: "target", Target: hyper.MustParseTarget("/contacts/1"), Title: "Ada Lovelace"},
     },
 }
 ```
@@ -1993,16 +1993,16 @@ An export represents an asynchronous job. Creating an export starts the process;
 ```go
 exports := hyper.Representation{
     Kind: "export-list",
-    Self: &hyper.Target{Href: "/contacts/exports"},
+    Self: hyper.MustParseTarget("/contacts/exports").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Export Contacts",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/exports"},
+            Target:   hyper.MustParseTarget("/contacts/exports"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {
@@ -2029,14 +2029,14 @@ exports := hyper.Representation{
         "items": {
             {
                 Kind: "export",
-                Self: &hyper.Target{Href: "/contacts/exports/1"},
+                Self: hyper.MustParseTarget("/contacts/exports/1").Ptr(),
                 State: hyper.Object{
                     "id":     hyper.Scalar{V: 1},
                     "format": hyper.Scalar{V: "csv"},
                     "status": hyper.Scalar{V: "complete"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/exports/1"}, Title: "Export #1"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/exports/1"), Title: "Export #1"},
                 },
             },
         },
@@ -2103,7 +2103,7 @@ When first created, the export is in `pending` state with no download link:
 ```go
 pendingExport := hyper.Representation{
     Kind: "export",
-    Self: &hyper.Target{Href: "/contacts/exports/2"},
+    Self: hyper.MustParseTarget("/contacts/exports/2").Ptr(),
     State: hyper.Object{
         "id":         hyper.Scalar{V: 2},
         "format":     hyper.Scalar{V: "csv"},
@@ -2111,7 +2111,7 @@ pendingExport := hyper.Representation{
         "created_at": hyper.Scalar{V: "2025-08-10T09:00:00Z"},
     },
     Links: []hyper.Link{
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "All Exports"},
     },
 }
 ```
@@ -2123,7 +2123,7 @@ Once processing finishes, the server adds a `download` `Link`:
 ```go
 completeExport := hyper.Representation{
     Kind: "export",
-    Self: &hyper.Target{Href: "/contacts/exports/2"},
+    Self: hyper.MustParseTarget("/contacts/exports/2").Ptr(),
     State: hyper.Object{
         "id":           hyper.Scalar{V: 2},
         "format":       hyper.Scalar{V: "csv"},
@@ -2133,8 +2133,8 @@ completeExport := hyper.Representation{
         "record_count": hyper.Scalar{V: 142},
     },
     Links: []hyper.Link{
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
-        {Rel: "download", Target: hyper.Target{Href: "/contacts/exports/2/file"}, Title: "Download CSV"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "All Exports"},
+        {Rel: "download", Target: hyper.MustParseTarget("/contacts/exports/2/file"), Title: "Download CSV"},
     },
 }
 ```
@@ -2251,7 +2251,7 @@ The single contact `Representation` (from [Section 6.2](#62-single-contact-serve
 ```go
 contact := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/1"},
+    Self: hyper.MustParseTarget("/contacts/1").Ptr(),
     State: hyper.Object{
         "id":       hyper.Scalar{V: 1},
         "name":     hyper.Scalar{V: "Ada Lovelace"},
@@ -2260,15 +2260,15 @@ contact := hyper.Representation{
         "archived": hyper.Scalar{V: false},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-        {Rel: "history", Target: hyper.Target{Href: "/contacts/1/history"}, Title: "History"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
+        {Rel: "history", Target: hyper.MustParseTarget("/contacts/1/history"), Title: "History"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: "/contacts/1"},
+            Target:   hyper.MustParseTarget("/contacts/1"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
@@ -2280,7 +2280,7 @@ contact := hyper.Representation{
             Name:   "Delete Contact",
             Rel:    "delete",
             Method: "DELETE",
-            Target: hyper.Target{Href: "/contacts/1"},
+            Target: hyper.MustParseTarget("/contacts/1"),
             Hints: map[string]any{
                 "confirm":     "Are you sure you want to delete Ada Lovelace?",
                 "destructive": true,
@@ -2290,7 +2290,7 @@ contact := hyper.Representation{
             Name:   "Archive Contact",
             Rel:    "archive",
             Method: "POST",
-            Target: hyper.Target{Href: "/contacts/1/archive"},
+            Target: hyper.MustParseTarget("/contacts/1/archive"),
             Hints: map[string]any{
                 "confirm": "Are you sure you want to archive Ada Lovelace?",
             },
@@ -2389,7 +2389,7 @@ After archiving, the contact's `Representation` changes: `"archived"` becomes `t
 ```go
 archivedContact := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/1"},
+    Self: hyper.MustParseTarget("/contacts/1").Ptr(),
     State: hyper.Object{
         "id":       hyper.Scalar{V: 1},
         "name":     hyper.Scalar{V: "Ada Lovelace"},
@@ -2398,15 +2398,15 @@ archivedContact := hyper.Representation{
         "archived": hyper.Scalar{V: true},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-        {Rel: "history", Target: hyper.Target{Href: "/contacts/1/history"}, Title: "History"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
+        {Rel: "history", Target: hyper.MustParseTarget("/contacts/1/history"), Title: "History"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Unarchive Contact",
             Rel:    "unarchive",
             Method: "POST",
-            Target: hyper.Target{Href: "/contacts/1/unarchive"},
+            Target: hyper.MustParseTarget("/contacts/1/unarchive"),
         },
     },
 }
@@ -2447,9 +2447,9 @@ The `Link` with `rel: "history"` on the contact points to a read-only collection
 ```go
 history := hyper.Representation{
     Kind: "history",
-    Self: &hyper.Target{Href: "/contacts/1/history"},
+    Self: hyper.MustParseTarget("/contacts/1/history").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contact", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+        {Rel: "contact", Target: hyper.MustParseTarget("/contacts/1"), Title: "Ada Lovelace"},
     },
     Embedded: map[string][]hyper.Representation{
         "items": {
@@ -2533,17 +2533,17 @@ The contacts list `Representation` (from [Section 5.2](#52-contacts-list-server-
 ```go
 list := hyper.Representation{
     Kind: "contact-list",
-    Self: &hyper.Target{Href: "/contacts"},
+    Self: hyper.MustParseTarget("/contacts").Ptr(),
     Links: []hyper.Link{
-        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "Export History"},
+        {Rel: "root", Target: hyper.Path(), Title: "Home"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "Export History"},
     },
     Actions: []hyper.Action{
         {
             Name:     "Create Contact",
             Rel:      "create",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts"},
+            Target:   hyper.MustParseTarget("/contacts"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Required: true},
@@ -2555,7 +2555,7 @@ list := hyper.Representation{
             Name:     "Merge Contacts",
             Rel:      "merge",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/merge"},
+            Target:   hyper.MustParseTarget("/contacts/merge"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {
@@ -2578,7 +2578,7 @@ list := hyper.Representation{
             Name:     "Export Contacts",
             Rel:      "export",
             Method:   "POST",
-            Target:   hyper.Target{Href: "/contacts/export"},
+            Target:   hyper.MustParseTarget("/contacts/export"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {
@@ -2758,7 +2758,7 @@ The `POST /contacts/export` response is an `export-job` `Representation`:
 ```go
 pendingJob := hyper.Representation{
     Kind: "export-job",
-    Self: &hyper.Target{Href: "/contacts/exports/1"},
+    Self: hyper.MustParseTarget("/contacts/exports/1").Ptr(),
     State: hyper.Object{
         "id":         hyper.Scalar{V: 1},
         "format":     hyper.Scalar{V: "csv"},
@@ -2766,7 +2766,7 @@ pendingJob := hyper.Representation{
         "created_at": hyper.Scalar{V: "2025-08-10T09:00:00Z"},
     },
     Links: []hyper.Link{
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "All Exports"},
     },
     Meta: map[string]any{
         "poll-interval": 2,
@@ -2802,7 +2802,7 @@ Once processing finishes, the job gains a `download` `Link` and updated state:
 ```go
 completeJob := hyper.Representation{
     Kind: "export-job",
-    Self: &hyper.Target{Href: "/contacts/exports/1"},
+    Self: hyper.MustParseTarget("/contacts/exports/1").Ptr(),
     State: hyper.Object{
         "id":           hyper.Scalar{V: 1},
         "format":       hyper.Scalar{V: "csv"},
@@ -2812,8 +2812,8 @@ completeJob := hyper.Representation{
         "record_count": hyper.Scalar{V: 142},
     },
     Links: []hyper.Link{
-        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
-        {Rel: "download", Target: hyper.Target{Href: "/contacts/exports/1/file"}, Title: "Download CSV"},
+        {Rel: "exports", Target: hyper.MustParseTarget("/contacts/exports"), Title: "All Exports"},
+        {Rel: "download", Target: hyper.MustParseTarget("/contacts/exports/1/file"), Title: "Download CSV"},
     },
 }
 ```
@@ -2863,22 +2863,22 @@ The `/contacts/exports` collection is a read-only log of all past exports. It ha
 ```go
 exportHistory := hyper.Representation{
     Kind: "export-history",
-    Self: &hyper.Target{Href: "/contacts/exports"},
+    Self: hyper.MustParseTarget("/contacts/exports").Ptr(),
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "Contacts"},
     },
     Embedded: map[string][]hyper.Representation{
         "items": {
             {
                 Kind: "export-job",
-                Self: &hyper.Target{Href: "/contacts/exports/1"},
+                Self: hyper.MustParseTarget("/contacts/exports/1").Ptr(),
                 State: hyper.Object{
                     "id":     hyper.Scalar{V: 1},
                     "format": hyper.Scalar{V: "csv"},
                     "status": hyper.Scalar{V: "complete"},
                 },
                 Links: []hyper.Link{
-                    {Rel: "self", Target: hyper.Target{Href: "/contacts/exports/1"}, Title: "Export #1"},
+                    {Rel: "self", Target: hyper.MustParseTarget("/contacts/exports/1"), Title: "Export #1"},
                 },
             },
         },
@@ -2982,15 +2982,15 @@ When a resource has many possible actions — for example, a contact in a CRM wi
 ```go
 contact := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{Href: "/contacts/1"},
+    Self: hyper.MustParseTarget("/contacts/1").Ptr(),
     State: hyper.Object{
         "id":    hyper.Scalar{V: 1},
         "name":  hyper.Scalar{V: "Ada Lovelace"},
         "email": hyper.Scalar{V: "ada@example.com"},
     },
     Links: []hyper.Link{
-        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-        {Rel: "actions", Target: hyper.Target{Href: "/contacts/1/actions"}, Title: "Available Actions"},
+        {Rel: "contacts", Target: hyper.MustParseTarget("/contacts"), Title: "All Contacts"},
+        {Rel: "actions", Target: hyper.MustParseTarget("/contacts/1/actions"), Title: "Available Actions"},
     },
     Actions: []hyper.Action{
         // Only the most common actions are embedded directly
@@ -2998,7 +2998,7 @@ contact := hyper.Representation{
             Name:     "Update Contact",
             Rel:      "update",
             Method:   "PUT",
-            Target:   hyper.Target{Href: "/contacts/1"},
+            Target:   hyper.MustParseTarget("/contacts/1"),
             Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},

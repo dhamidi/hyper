@@ -29,20 +29,20 @@ For each key interaction, show Go code that builds the `hyper.Representation` va
 ```go
 rep := hyper.Representation{
     Kind: "order",
-    Self: &hyper.Target{Href: "/orders/99"},
+    Self: hyper.Path("orders", "99").Ptr(),
     State: hyper.Object{
         "status": hyper.Scalar{V: "pending"},
         "total":  hyper.Scalar{V: 49.99},
     },
     Links: []hyper.Link{
-        {Rel: "customer", Target: hyper.Target{Href: "/customers/7"}, Title: "Customer"},
+        {Rel: "customer", Target: hyper.Path("customers", "7"), Title: "Customer"},
     },
     Actions: []hyper.Action{
         {
             Name:   "Confirm",
             Rel:    "confirm",
             Method: "POST",
-            Target: hyper.Target{Href: "/orders/99/confirm"},
+            Target: hyper.Path("orders", "99", "confirm"),
         },
     },
 }
