@@ -170,6 +170,18 @@ type Representation struct {
 - `Embedded` MAY contain named related or fragment representations
 - `Meta` MAY contain application-specific metadata
 
+#### Embedded Representations for Item Lists
+
+When state contains a list of independently addressable items (e.g. contacts,
+orders, articles), implementations SHOULD prefer `Embedded` over
+`State: Collection{...}`. Embedded representations carry their own `Self`,
+`Kind`, `Links`, and `Actions`, which enables machine clients to navigate to,
+inspect, and act on individual items without out-of-band knowledge.
+
+`Collection` remains appropriate for flat value lists where items are not
+independently addressable — for example, tags, categories, or enumerated
+labels.
+
 ### 6.1.2 Requirements
 
 - Implementations SHOULD treat a `Representation` as immutable during encoding
@@ -322,6 +334,29 @@ type Option struct {
 
 `Field` describes the input contract of an action. It does not prescribe a
 specific rendering strategy.
+
+### 7.3.1 Recommended Field Type Vocabulary
+
+The following base vocabulary for `Field.Type` is RECOMMENDED. These values
+align with HTML input types, providing a shared vocabulary that both HTML
+codecs and non-HTML clients (CLI tools, mobile apps) can interpret:
+
+| Type       | Description                                  |
+|------------|----------------------------------------------|
+| `text`     | Single-line text input                       |
+| `email`    | Email address input                          |
+| `tel`      | Telephone number input                       |
+| `number`   | Numeric input                                |
+| `date`     | Date input                                   |
+| `url`      | URL input                                    |
+| `password` | Masked text input                            |
+| `hidden`   | Hidden input (not displayed to the user)     |
+| `textarea` | Multi-line text input                        |
+| `select`   | Selection from `Options`                     |
+| `checkbox` | Boolean toggle                               |
+
+Codecs MAY support additional type values beyond this list. Unknown types
+SHOULD be treated as `text` by codecs that do not recognize them.
 
 ## 8. Targets and URL Resolution
 
@@ -520,6 +555,120 @@ A JSON codec SHOULD preserve:
 - actions
 - embedded representations
 
+### 13.3 JSON Wire Format
+
+A JSON codec SHOULD encode a `Representation` as a JSON object with the
+following top-level keys:
+
+```json
+{
+  "kind": "contact",
+  "self": { "href": "/contacts/42" },
+  "state": { ... },
+  "links": [ ... ],
+  "actions": [ ... ],
+  "embedded": { ... },
+  "meta": { ... }
+}
+```
+
+Keys that are empty or absent in the source representation MAY be omitted
+from the JSON output.
+
+#### 13.3.1 State Encoding
+
+State values SHALL be encoded according to their type:
+
+- `Scalar` — encoded as the underlying JSON value (string, number, boolean,
+  or null).
+- `RichText` — encoded as an object with a type discriminator:
+  `{"_type": "richtext", "mediaType": "text/markdown", "source": "..."}`.
+- `Object` — encoded as a JSON object whose keys map to encoded values.
+- `Collection` — encoded as a JSON array of encoded values.
+
+#### 13.3.2 Link Encoding
+
+Each `Link` SHALL be encoded as a JSON object:
+
+```json
+{
+  "rel": "author",
+  "href": "/users/7",
+  "title": "Author Profile",
+  "type": "text/html"
+}
+```
+
+The `href` key SHALL contain the resolved target URL. The `title` and `type`
+keys MAY be omitted when empty.
+
+#### 13.3.3 Action Encoding
+
+Each `Action` SHALL be encoded as a JSON object:
+
+```json
+{
+  "name": "Save",
+  "rel": "update",
+  "method": "PUT",
+  "href": "/contacts/42",
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "fields": [ ... ],
+  "hints": { ... }
+}
+```
+
+The `href` key SHALL contain the resolved target URL. Keys with empty or
+zero values MAY be omitted.
+
+#### 13.3.4 Field Encoding
+
+Each `Field` SHALL be encoded as a JSON object:
+
+```json
+{
+  "name": "email",
+  "type": "email",
+  "value": "ada@example.com",
+  "required": true,
+  "readOnly": false,
+  "label": "Email Address",
+  "help": "Your primary email",
+  "options": [{"value": "a", "label": "A", "selected": false}],
+  "error": ""
+}
+```
+
+Boolean fields that are `false` and string fields that are empty MAY be
+omitted.
+
+#### 13.3.5 Embedded Representation Encoding
+
+The `embedded` key SHALL be a JSON object whose keys are slot names and
+whose values are arrays of encoded representations (following the same
+top-level structure recursively).
+
+#### 13.3.6 Target Encoding
+
+In JSON output, targets SHALL be represented as resolved URL strings under
+the `href` key. The `self` field SHALL be encoded as
+`{"href": "<resolved-url>"}` or omitted when absent.
+
+#### 13.3.7 Divergence from Existing Formats
+
+The `hyper` JSON wire format is intentionally self-contained and does not
+conform to HAL, Siren, or JSON:API. Key differences:
+
+- HAL uses `_links` and `_embedded`; `hyper` uses `links` and `embedded`.
+- Siren separates `properties` from `entities`; `hyper` uses `state` for all
+  application data and `embedded` for sub-representations.
+- JSON:API mandates `data`, `attributes`, and `relationships`; `hyper` uses a
+  flat structure with `kind` and `state`.
+
+Implementations that need interoperability with these formats SHOULD provide
+separate codec implementations.
+
 ## 14. Examples
 
 ### 14.1 Representation with an Update Action
@@ -673,6 +822,41 @@ func (a *App) ContactPreview(w http.ResponseWriter, r *http.Request) {
     _ = a.Renderer.Respond(w, r, http.StatusOK, rep)
 }
 ```
+
+### 14.5 Root Representation (API Entry Point)
+
+A discovery-driven client needs a well-known entry point from which to
+begin navigating the API. A "root" representation serves this purpose: it
+carries top-level links and actions that bootstrap navigation, and it may
+have no meaningful `State`.
+
+```go
+rep := hyper.Representation{
+    Kind: "root",
+    Self: &hyper.Target{Href: "/"},
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "settings", Target: hyper.Target{Href: "/settings"}, Title: "Settings"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Search",
+            Rel:    "search",
+            Method: "GET",
+            Target: hyper.Target{Href: "/search"},
+            Fields: []hyper.Field{
+                {Name: "q", Type: "text", Label: "Query"},
+            },
+        },
+    },
+}
+```
+
+The root representation is not a special type — it is a normal
+`Representation` whose purpose is to expose the top-level navigation graph.
+Machine clients (CLI tools, mobile apps, third-party integrations) SHOULD
+use the root representation as their starting point and follow links
+rather than hard-coding endpoint URLs.
 
 ## 15. Interaction Points
 
@@ -905,6 +1089,42 @@ func contactHandler(eng *htmlc.Engine, w http.ResponseWriter, r *http.Request) {
     _ = eng.RenderPage(w, "contact", scope)
 }
 ```
+
+### 15.6 CLI Client Hints
+
+**How do I use `Action.Hints` to improve the experience for non-HTML clients
+such as CLI tools?**
+
+The `Hints` map already supports arbitrary metadata. CLI-oriented hint keys
+allow a server to communicate interaction guidance that terminal clients can
+use to improve usability:
+
+```go
+action := hyper.Action{
+    Name:   "Delete Contact",
+    Rel:    "delete",
+    Method: "DELETE",
+    Target: hyper.Target{Href: "/contacts/42"},
+    Hints: map[string]any{
+        "confirm":     "Are you sure you want to delete this contact?",
+        "destructive": true,
+        "hidden":      false,
+    },
+}
+```
+
+Suggested CLI-relevant hint keys:
+
+| Key           | Type     | Description                                         |
+|---------------|----------|-----------------------------------------------------|
+| `confirm`     | `string` | Prompt text to display before executing the action   |
+| `destructive` | `bool`   | Indicates the action has destructive side effects    |
+| `hidden`      | `bool`   | Suppress the action from default action listings     |
+
+These keys are conventions, not requirements. Codecs and clients that do not
+recognize them SHOULD ignore them. HTML codecs might render `destructive`
+actions with a warning style, while CLI clients might display a confirmation
+prompt for actions carrying a `confirm` hint.
 
 ## 16. Compliance Requirements
 
