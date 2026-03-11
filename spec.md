@@ -250,6 +250,39 @@ Codecs MAY:
 - preserve `text/markdown` as Markdown
 - surface rich text as typed JSON
 
+### 6.4 State Construction Helpers
+
+Building `Object` values manually requires wrapping every leaf in `Scalar`,
+which obscures intent:
+
+```go
+State: hyper.Object{
+    "id":    hyper.Scalar{V: c.ID},
+    "name":  hyper.Scalar{V: c.Name},
+    "email": hyper.Scalar{V: c.Email},
+}
+```
+
+The library SHALL provide a convenience constructor that eliminates this
+ceremony:
+
+```go
+// StateFrom builds an Object from alternating key-value pairs.
+// Values that do not implement the Value interface are automatically
+// wrapped in Scalar{V: v}. Values that already implement Value
+// (e.g. RichText) are used as-is.
+//
+// Panics if len(pairs) is odd or if any key is not a string.
+//
+//   hyper.StateFrom("id", 42, "name", "Ada")
+//   // equivalent to:
+//   // hyper.Object{"id": hyper.Scalar{V: 42}, "name": hyper.Scalar{V: "Ada"}}
+func StateFrom(pairs ...any) Object
+```
+
+`StateFrom` is a thin wrapper — it produces the same `Object` map that manual
+construction produces. Codecs and renderers see no difference.
+
 ## 7. Hypermedia Controls
 
 ### 7.1 Link
@@ -471,6 +504,54 @@ codecs and non-HTML clients (CLI tools, mobile apps) can interpret:
 
 Codecs MAY support additional type values beyond this list. Unknown types
 SHOULD be treated as `text` by codecs that do not recognize them.
+
+### 7.4 Field Convenience Functions
+
+Fields for a resource are often defined once (schema) and then reused in
+multiple contexts: create actions (no values), update actions (current values),
+and validation error responses (submitted values plus errors). The library
+SHALL provide convenience functions for deriving context-specific field slices
+from a shared definition:
+
+```go
+// WithValues returns a shallow copy of fields with Value populated from the
+// given map. Fields whose Name does not appear in the map retain their
+// existing Value. The original slice is not modified.
+//
+// Used for update actions where fields should show current values.
+func WithValues(fields []Field, values map[string]any) []Field
+
+// WithErrors returns a shallow copy of fields with Value and Error populated
+// from the given maps. Fields whose Name does not appear in a map retain
+// their existing Value or Error. The original slice is not modified.
+//
+// Used for validation error responses where fields should show submitted
+// values and per-field error messages.
+func WithErrors(fields []Field, values map[string]any, errors map[string]string) []Field
+```
+
+These functions encourage defining field metadata once:
+
+```go
+var contactFields = []Field{
+    {Name: "name", Type: "text", Label: "Name", Required: true},
+    {Name: "email", Type: "email", Label: "Email", Required: true},
+    {Name: "phone", Type: "tel", Label: "Phone"},
+}
+
+// Create action — fields with no values (user fills them in)
+action.Fields = contactFields
+
+// Update action — fields pre-populated with current values
+action.Fields = hyper.WithValues(contactFields, map[string]any{
+    "name": c.Name, "email": c.Email, "phone": c.Phone,
+})
+
+// Validation error — fields with submitted values and error messages
+action.Fields = hyper.WithErrors(contactFields, submittedValues, validationErrors)
+```
+
+Both functions return new slices and do not mutate the original fields.
 
 ## 8. Targets and URL Resolution
 
@@ -1458,7 +1539,9 @@ A conforming implementation MAY:
 The following questions remain open for later revisions:
 
 1. whether `Hints` should remain a plain map or become typed codec extensions
-2. whether `Object` and `Collection` should remain minimal or grow helper APIs
+2. ~~whether `Object` and `Collection` should remain minimal or grow helper APIs~~
+   Resolved: `StateFrom` (§6.4) provides a convenience constructor for `Object`.
+   `WithValues` and `WithErrors` (§7.4) provide field derivation helpers.
 3. whether JSON support should target a specific hypermedia media type first
 4. whether additional provider interfaces (e.g. `EmbeddedProvider`,
    `MetaProvider`) should be added to the extensibility surface
