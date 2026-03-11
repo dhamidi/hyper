@@ -92,8 +92,8 @@ The library SHOULD support patterns common in `htmx` applications, including:
 
 The core model SHALL describe targets abstractly.
 
-Target resolution SHALL occur through an interface so that routing libraries
-such as `github.com/dhamidi/dispatch` can be used without modification.
+Target resolution SHALL occur through an interface so that any routing library
+can be used without modification.
 
 ## 4. Terminology
 
@@ -361,31 +361,6 @@ A resolver SHALL:
 2. resolve `Route` when present
 3. fail when neither form is present
 
-### 8.2.2 Dispatch Compatibility
-
-The resolver seam SHALL be narrow enough to support
-`github.com/dhamidi/dispatch` without modification.
-
-Example adapter:
-
-```go
-type DispatchResolver struct {
-    Router interface {
-        Path(string, dispatch.Params) (string, error)
-    }
-}
-
-func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (string, error) {
-    if t.Href != "" {
-        return t.Href, nil
-    }
-    if t.Route == nil {
-        return "", errors.New("hyper: missing target")
-    }
-    return r.Router.Path(t.Route.Name, dispatch.Params(t.Route.Params))
-}
-```
-
 ## 9. Media Type Components
 
 ### 9.1 RepresentationCodec
@@ -503,19 +478,14 @@ An HTML codec SHOULD support:
 - fragment rendering
 - nested rendering of embedded representations
 
-### 11.4 HTMX Hints
+### 11.4 Codec-Specific Hints
 
-HTML-specific hint keys MAY be carried in `Action.Hints`.
+`Action.Hints` MAY carry codec-specific or framework-specific hint keys.
 
-Examples include:
-
-- `hx-target`
-- `hx-swap`
-- `hx-push-url`
-- `hx-select`
-
-The core model SHALL NOT require these keys, but an HTML codec MAY interpret
-them.
+The core model does not define or require any specific keys. Codecs MAY
+interpret hint keys that are relevant to their output format. See the
+Interaction Points section for concrete examples of how different front-end
+frameworks use `Hints`.
 
 ## 12. Markdown Codec
 
@@ -704,7 +674,226 @@ func (a *App) ContactPreview(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## 15. Compliance Requirements
+## 15. Interaction Points
+
+This section shows how `hyper` integrates with the broader Go ecosystem
+through short, focused examples. Each subsection poses a concrete question
+and answers it with minimal code.
+
+### 15.1 Routing with `github.com/dhamidi/dispatch`
+
+**How do I resolve `hyper.Target` route references using the `dispatch` router?**
+
+Implement a `Resolver` adapter that delegates named-route resolution to
+`dispatch.Router.Path`:
+
+```go
+type DispatchResolver struct {
+    Router interface {
+        Path(string, dispatch.Params) (string, error)
+    }
+}
+
+func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (string, error) {
+    if t.Href != "" {
+        return t.Href, nil
+    }
+    if t.Route == nil {
+        return "", errors.New("hyper: missing target")
+    }
+    return r.Router.Path(t.Route.Name, dispatch.Params(t.Route.Params))
+}
+```
+
+### 15.2 Routing with `net/http`'s `http.ServeMux`
+
+**How do I use `hyper.Target` with the standard library's `http.ServeMux`,
+which does not support reverse routing?**
+
+Because `ServeMux` has no named routes, use direct `Href` targets instead
+of `RouteRef`:
+
+```go
+// HrefResolver resolves targets that carry a direct Href.
+// It returns an error for RouteRef targets because ServeMux
+// does not support reverse routing.
+type HrefResolver struct{}
+
+func (HrefResolver) ResolveTarget(_ context.Context, t hyper.Target) (string, error) {
+    if t.Href != "" {
+        return t.Href, nil
+    }
+    return "", errors.New("hyper: ServeMux does not support named routes")
+}
+```
+
+Build representations with `Href`-based targets:
+
+```go
+func contactHandler(w http.ResponseWriter, r *http.Request) {
+    rep := hyper.Representation{
+        Kind: "contact",
+        Self: &hyper.Target{Href: "/contacts/42"},
+        State: hyper.Object{
+            "name": hyper.Scalar{V: "Ada"},
+        },
+        Actions: []hyper.Action{
+            {
+                Name:   "Save",
+                Rel:    "update",
+                Method: "PUT",
+                Target: hyper.Target{Href: "/contacts/42"},
+                Fields: []hyper.Field{
+                    {Name: "name", Type: "text", Value: "Ada", Required: true},
+                },
+            },
+        },
+    }
+    _ = renderer.Respond(w, r, http.StatusOK, rep)
+}
+```
+
+For named-route support with the standard library, a small route registry
+helper can map route names to URL patterns at startup.
+
+### 15.3 HTMX with `html/template`
+
+**How do I render a `hyper.Action` as an htmx-enhanced form using Go's
+`html/template`?**
+
+Populate the `Hints` map with htmx attributes when building the action:
+
+```go
+action := hyper.Action{
+    Name:   "Save Email",
+    Rel:    "update-email",
+    Method: "PUT",
+    Target: hyper.Target{Href: "/contacts/42/email"},
+    Fields: []hyper.Field{
+        {Name: "email", Type: "email", Value: "ada@example.com", Required: true},
+    },
+    Hints: map[string]any{
+        "hx-target": "#contact-email",
+        "hx-swap":   "outerHTML",
+    },
+}
+```
+
+Render the hints in a template:
+
+```html
+<form method="{{.Method}}" action="{{.ResolvedTarget}}"
+  {{- range $k, $v := .Hints }}
+    {{$k}}="{{$v}}"
+  {{- end }}>
+  {{range .Fields}}
+    <label>{{.Label}}
+      <input type="{{.Type}}" name="{{.Name}}" value="{{.Value}}">
+    </label>
+  {{end}}
+  <button type="submit">{{.Name}}</button>
+</form>
+```
+
+`Hints` is an open map — the core model imposes no fixed key set. Any
+framework-specific attributes (e.g. `hx-target`, `hx-swap`, `hx-push-url`,
+`hx-select`) are carried as plain key-value pairs.
+
+### 15.4 Hotwire (Turbo + Stimulus)
+
+**How do I integrate `hyper` representations with Hotwire's Turbo Frames
+and Stimulus controllers?**
+
+Use `Meta` or `Hints` to carry Turbo Frame IDs and Stimulus annotations:
+
+```go
+rep := hyper.Representation{
+    Kind: "contact",
+    Self: &hyper.Target{Href: "/contacts/42"},
+    State: hyper.Object{
+        "name": hyper.Scalar{V: "Ada"},
+    },
+    Meta: map[string]any{
+        "turbo-frame": "contact_42",
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Save",
+            Method: "PUT",
+            Target: hyper.Target{Href: "/contacts/42"},
+            Hints: map[string]any{
+                "data-controller": "form",
+                "data-action":     "submit->form#save",
+            },
+        },
+    },
+}
+```
+
+Render in a template with Turbo Frame wrapping and Stimulus attributes:
+
+```html
+<turbo-frame id="{{.Meta.turbo-frame}}">
+  <h2>{{.State.name}}</h2>
+  {{range .Actions}}
+  <form method="{{.Method}}" action="{{.ResolvedTarget}}"
+    {{- range $k, $v := .Hints }}
+      {{$k}}="{{$v}}"
+    {{- end }}>
+    {{range .Fields}}
+      <input type="{{.Type}}" name="{{.Name}}" value="{{.Value}}">
+    {{end}}
+    <button type="submit">{{.Name}}</button>
+  </form>
+  {{end}}
+</turbo-frame>
+```
+
+The pattern is the same as for htmx: framework-specific attributes flow
+through the open `Hints` and `Meta` maps without any core model changes.
+
+### 15.5 Component Abstraction with `github.com/dhamidi/htmlc`
+
+**How do I render a `hyper.Representation` as an `htmlc` component tree?**
+
+Map `Representation.Kind` to an `htmlc` component, pass `State` fields as
+props, and render child components for embedded representations:
+
+```go
+func renderComponent(r hyper.Representation) htmlc.Component {
+    c := htmlc.New(r.Kind)
+
+    // Pass state fields as props.
+    if obj, ok := r.State.(hyper.Object); ok {
+        for k, v := range obj {
+            if s, ok := v.(hyper.Scalar); ok {
+                c.Set(k, s.V)
+            }
+        }
+    }
+
+    // Render embedded representations as child components.
+    for slot, reps := range r.Embedded {
+        for _, embedded := range reps {
+            c.Slot(slot, renderComponent(embedded))
+        }
+    }
+
+    return c
+}
+```
+
+Use the component in a handler:
+
+```go
+func contactHandler(w http.ResponseWriter, r *http.Request) {
+    rep := buildContactRepresentation()
+    component := renderComponent(rep)
+    _ = htmlc.Render(w, component)
+}
+```
+
+## 16. Compliance Requirements
 
 A conforming implementation of `hyper` MUST:
 
@@ -722,9 +911,9 @@ A conforming implementation SHOULD:
 3. provide a JSON hypermedia codec
 4. provide renderer helpers for negotiated and explicit response formats
 5. support field-level validation feedback in action fields
-6. define the extension interfaces specified in section 16
+6. define the extension interfaces specified in section 17
 
-## 16. Extensibility (Draft)
+## 17. Extensibility (Draft)
 
 This section is a **draft** and subject to change.
 
@@ -732,9 +921,9 @@ Existing Go types SHOULD be able to participate in the hypermedia system by
 implementing narrow, opt-in interfaces. Each interface maps to a single concern
 so that a type can adopt only the extension points that are relevant to it.
 
-### 16.1 Extension Interfaces
+### 17.1 Extension Interfaces
 
-#### 16.1.1 RepresentationProvider
+#### 17.1.1 RepresentationProvider
 
 A type that can present itself as a complete `Representation`.
 
@@ -749,7 +938,7 @@ When a codec or renderer encounters a value implementing
 full hypermedia representation, including state, links, actions, and embedded
 representations.
 
-#### 16.1.2 NodeProvider
+#### 17.1.2 NodeProvider
 
 A type that can express its state as a `Node`.
 
@@ -762,7 +951,7 @@ type NodeProvider interface {
 This allows domain types to supply structured state for the `State` field of a
 `Representation` without being modified to implement `Node` directly.
 
-#### 16.1.3 ValueProvider
+#### 17.1.3 ValueProvider
 
 A type that can express itself as a `Value`.
 
@@ -776,7 +965,7 @@ This allows leaf domain values (e.g. custom identifiers, enumerations, money
 types) to participate in `Object` or `Collection` containers without
 wrapping in `Scalar`.
 
-#### 16.1.4 LinkProvider
+#### 17.1.4 LinkProvider
 
 A type that can contribute navigational links.
 
@@ -790,7 +979,7 @@ When constructing a `Representation` from an existing domain type, the builder
 or codec SHOULD merge links returned by `HyperLinks()` into the
 representation's `Links` slice.
 
-#### 16.1.5 ActionProvider
+#### 17.1.5 ActionProvider
 
 A type that can contribute available actions.
 
@@ -804,7 +993,7 @@ When constructing a `Representation` from an existing domain type, the builder
 or codec SHOULD merge actions returned by `HyperActions()` into the
 representation's `Actions` slice.
 
-### 16.2 Composition Rules
+### 17.2 Composition Rules
 
 A single type MAY implement any combination of these interfaces. When a type
 implements multiple provider interfaces, the following precedence SHOULD apply:
@@ -819,7 +1008,7 @@ implements multiple provider interfaces, the following precedence SHOULD apply:
 3. `LinkProvider` and `ActionProvider` SHOULD be consulted independently to
    populate `Links` and `Actions` when building a representation from parts.
 
-### 16.3 Discovery by Codecs and Renderers
+### 17.3 Discovery by Codecs and Renderers
 
 Codecs and renderers SHOULD use Go type assertions to discover provider
 interfaces on values passed to them. They MUST NOT require reflection or code
@@ -849,7 +1038,7 @@ func buildRepresentation(v any) Representation {
 }
 ```
 
-### 16.4 Requirements
+### 17.4 Requirements
 
 - Extension interfaces MUST be optional; types that do not implement them
   SHALL continue to work through manual `Representation` construction.
@@ -860,7 +1049,7 @@ func buildRepresentation(v any) Representation {
 - Implementations MUST NOT use reflection to discover these interfaces;
   standard Go type assertions SHALL be used.
 
-### 16.5 Compliance
+### 17.5 Compliance
 
 A conforming implementation of `hyper` SHOULD:
 
@@ -874,14 +1063,15 @@ A conforming implementation MAY:
 2. accept provider interfaces on values nested inside `Object` and
    `Collection` containers
 
-## 17. Open Questions
+## 18. Open Questions
 
 The following questions remain open for later revisions:
 
 1. whether `Hints` should remain a plain map or become typed codec extensions
 2. whether `Object` and `Collection` should remain minimal or grow helper APIs
 3. whether JSON support should target a specific hypermedia media type first
-4. how much fragment-targeting behavior should be standardized for `htmx`
-5. whether additional provider interfaces (e.g. `EmbeddedProvider`,
+4. whether additional provider interfaces (e.g. `EmbeddedProvider`,
    `MetaProvider`) should be added to the extensibility surface
-6. whether provider interfaces should accept a `context.Context` parameter
+5. whether provider interfaces should accept a `context.Context` parameter
+6. whether `Hints` keys should follow a namespacing convention (e.g.
+   `htmx:target` vs `hx-target`) to avoid collisions across frameworks
