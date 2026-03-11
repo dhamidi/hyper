@@ -73,7 +73,110 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 
 The `renderer.Respond` call inspects the request's `Accept` header and selects the appropriate codec (§9). If the client sends `Accept: application/vnd.api+json`, the JSON codec encodes the representation. If a browser sends `Accept: text/html`, an HTML codec renders the same representation as a web page. The handler does not know or care which client is connecting.
 
-### 3.2 Handler: Contact List
+### 3.2 Domain Layer and Representation Functions
+
+Before looking at the remaining handlers, it is worth establishing a pattern that keeps them thin. The handlers in §3.1 (root) are simple enough to inline, but handlers that deal with domain logic (validation, persistence) and hypermedia construction benefit from separating those concerns into distinct functions.
+
+**Domain layer** — plain Go functions with no `hyper` imports. These encapsulate validation rules and business logic:
+
+```go
+// Domain types and validation — no hyper imports
+
+type ContactInput struct {
+    Name  string `json:"name"`
+    Email string `json:"email"`
+    Phone string `json:"phone"`
+}
+
+type ValidationErrors map[string]string
+
+func validateContactInput(input ContactInput) ValidationErrors {
+    errs := ValidationErrors{}
+    if input.Name == "" {
+        errs["name"] = "Name is required"
+    }
+    if input.Email == "" {
+        errs["email"] = "Email is required"
+    } else if !isValidEmail(input.Email) {
+        errs["email"] = "Invalid email address"
+    }
+    return errs
+}
+```
+
+**Representation layer** — functions that map domain objects to `hyper.Representation` values. These are mechanical mappings with no business logic:
+
+```go
+// Representation functions — map domain objects to hyper types
+
+func contactRepresentation(c Contact) hyper.Representation {
+    return hyper.Representation{
+        Kind: "contact",
+        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+        State: hyper.Object{
+            "id":    hyper.Scalar{V: c.ID},
+            "name":  hyper.Scalar{V: c.Name},
+            "email": hyper.Scalar{V: c.Email},
+            "phone": hyper.Scalar{V: c.Phone},
+        },
+        Links: []hyper.Link{
+            {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
+        },
+    }
+}
+
+func contactSummaryRepresentation(c Contact) hyper.Representation {
+    return hyper.Representation{
+        Kind: "contact",
+        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+        State: hyper.Object{
+            "id":    hyper.Scalar{V: c.ID},
+            "name":  hyper.Scalar{V: c.Name},
+            "email": hyper.Scalar{V: c.Email},
+        },
+        Links: []hyper.Link{
+            {Rel: "self", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)}, Title: c.Name},
+        },
+    }
+}
+
+func createContactFormRepresentation(input ContactInput, fieldErrors ValidationErrors) hyper.Representation {
+    fields := []hyper.Field{
+        {Name: "name", Type: "text", Label: "Name", Value: input.Name, Required: true},
+        {Name: "email", Type: "email", Label: "Email", Value: input.Email, Required: true},
+        {Name: "phone", Type: "tel", Label: "Phone", Value: input.Phone},
+    }
+
+    for i, f := range fields {
+        if errMsg, ok := fieldErrors[f.Name]; ok {
+            fields[i].Error = errMsg
+        }
+    }
+
+    return hyper.Representation{
+        Kind: "contact-form",
+        Self: &hyper.Target{Href: "/contacts"},
+        Actions: []hyper.Action{
+            {
+                Name:     "Create Contact",
+                Rel:      "create",
+                Method:   "POST",
+                Target:   hyper.Target{Href: "/contacts"},
+                Consumes: []string{"application/vnd.api+json"},
+                Fields:   fields,
+            },
+        },
+    }
+}
+```
+
+This separation has three benefits:
+
+1. **Representation functions are reusable.** The same `contactRepresentation` function serves the single-contact GET handler (§3.4), the create handler's success path (§3.5), and the update handler (§11.2). If the contact wire format changes, there is one place to update.
+2. **Validation is a domain concern that produces data, not hypermedia.** `validateContactInput` returns a plain `map[string]string` — the representation layer maps those errors into `Field.Error` values. This makes validation testable without importing `hyper`.
+3. **Handlers become thin orchestrators**: decode, validate, persist, represent, respond. Each step is a single function call.
+
+### 3.3 Handler: Contact List
 
 ```go
 func handleContactList(w http.ResponseWriter, r *http.Request) {
@@ -85,18 +188,7 @@ func handleContactList(w http.ResponseWriter, r *http.Request) {
 
     items := make([]hyper.Representation, len(contacts))
     for i, c := range contacts {
-        items[i] = hyper.Representation{
-            Kind: "contact",
-            Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
-            State: hyper.Object{
-                "id":    hyper.Scalar{V: c.ID},
-                "name":  hyper.Scalar{V: c.Name},
-                "email": hyper.Scalar{V: c.Email},
-            },
-            Links: []hyper.Link{
-                {Rel: "self", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)}, Title: c.Name},
-            },
-        }
+        items[i] = contactSummaryRepresentation(c)
     }
 
     list := hyper.Representation{
@@ -128,9 +220,11 @@ func handleContactList(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-There is nothing CLI-specific here. The `Fields` on the `create` action describe what the server accepts — the CLI reads `Label`, `Required`, and `Type` to build its flags, but a browser reads the same metadata to render a form. The server is the single source of truth for what inputs are needed and what constraints apply.
+The loop body is now a single call to `contactSummaryRepresentation`. There is nothing CLI-specific here. The `Fields` on the `create` action describe what the server accepts — the CLI reads `Label`, `Required`, and `Type` to build its flags, but a browser reads the same metadata to render a form. The server is the single source of truth for what inputs are needed and what constraints apply.
 
-### 3.3 Handler: Single Contact
+### 3.4 Handler: Single Contact
+
+The single-contact handler uses `contactRepresentation` for the base representation and adds handler-specific links and actions:
 
 ```go
 func handleContact(w http.ResponseWriter, r *http.Request) {
@@ -141,78 +235,58 @@ func handleContact(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    contact := hyper.Representation{
-        Kind: "contact",
-        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
-        State: hyper.Object{
-            "id":    hyper.Scalar{V: c.ID},
-            "name":  hyper.Scalar{V: c.Name},
-            "email": hyper.Scalar{V: c.Email},
-            "phone": hyper.Scalar{V: c.Phone},
-        },
-        Links: []hyper.Link{
-            {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-            {Rel: "notes", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d/notes", c.ID)}, Title: "Notes"},
-        },
-        Actions: []hyper.Action{
-            {
-                Name:     "Update Contact",
-                Rel:      "update",
-                Method:   "PUT",
-                Target:   hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
-                Consumes: []string{"application/vnd.api+json"},
-                Fields: []hyper.Field{
-                    {Name: "name", Type: "text", Label: "Name", Value: c.Name, Required: true},
-                    {Name: "email", Type: "email", Label: "Email", Value: c.Email, Required: true},
-                    {Name: "phone", Type: "tel", Label: "Phone", Value: c.Phone},
-                },
+    rep := contactRepresentation(c)
+
+    // Add links and actions specific to the detail view
+    rep.Links = append(rep.Links,
+        hyper.Link{Rel: "notes", Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d/notes", c.ID)}, Title: "Notes"},
+    )
+    rep.Actions = []hyper.Action{
+        {
+            Name:     "Update Contact",
+            Rel:      "update",
+            Method:   "PUT",
+            Target:   hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "name", Type: "text", Label: "Name", Value: c.Name, Required: true},
+                {Name: "email", Type: "email", Label: "Email", Value: c.Email, Required: true},
+                {Name: "phone", Type: "tel", Label: "Phone", Value: c.Phone},
             },
-            {
-                Name:   "Delete Contact",
-                Rel:    "delete",
-                Method: "DELETE",
-                Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
-                Hints: map[string]any{
-                    "confirm":     fmt.Sprintf("Are you sure you want to delete %s?", c.Name),
-                    "destructive": true,
-                },
+        },
+        {
+            Name:   "Delete Contact",
+            Rel:    "delete",
+            Method: "DELETE",
+            Target: hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
+            Hints: map[string]any{
+                "confirm":     fmt.Sprintf("Are you sure you want to delete %s?", c.Name),
+                "destructive": true,
             },
         },
     }
 
-    renderer.Respond(w, r, http.StatusOK, contact)
+    renderer.Respond(w, r, http.StatusOK, rep)
 }
 ```
 
-The `update` action pre-populates `Field.Value` with the current values. This is pure server logic — the CLI uses these as flag defaults, a browser pre-fills form inputs, and a mobile app pre-populates text fields. The `delete` action carries `Hints` (§15.6) that the CLI renders as a confirmation prompt with warning styling. The server does not know how the hints will be rendered — it only declares semantics.
+The handler starts from `contactRepresentation(c)` — the same function that the create handler uses for its success response — and extends it with detail-view-specific affordances. The `update` action pre-populates `Field.Value` with the current values. This is pure server logic — the CLI uses these as flag defaults, a browser pre-fills form inputs, and a mobile app pre-populates text fields. The `delete` action carries `Hints` (§15.6) that the CLI renders as a confirmation prompt with warning styling. The server does not know how the hints will be rendered — it only declares semantics.
 
-### 3.4 Handler: Create Contact
+### 3.5 Handler: Create Contact
+
+With the domain and representation layers from §3.2, the create handler becomes a thin orchestrator — decode, validate, persist, represent, respond:
 
 ```go
 func handleCreateContact(w http.ResponseWriter, r *http.Request) {
-    var input struct {
-        Name  string `json:"name"`
-        Email string `json:"email"`
-        Phone string `json:"phone"`
-    }
+    var input ContactInput
     if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
         renderError(w, r, err)
         return
     }
 
-    // Validate
-    fieldErrors := map[string]string{}
-    if input.Name == "" {
-        fieldErrors["name"] = "Name is required"
-    }
-    if input.Email == "" {
-        fieldErrors["email"] = "Email is required"
-    } else if !isValidEmail(input.Email) {
-        fieldErrors["email"] = "Invalid email address"
-    }
-
-    if len(fieldErrors) > 0 {
-        renderValidationError(w, r, input, fieldErrors)
+    if errs := validateContactInput(input); len(errs) > 0 {
+        renderer.Respond(w, r, http.StatusUnprocessableEntity,
+            createContactFormRepresentation(input, errs))
         return
     }
 
@@ -222,66 +296,25 @@ func handleCreateContact(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Return the created resource as a full representation
-    created := hyper.Representation{
-        Kind: "contact",
-        Self: &hyper.Target{Href: fmt.Sprintf("/contacts/%d", c.ID)},
-        State: hyper.Object{
-            "id":    hyper.Scalar{V: c.ID},
-            "name":  hyper.Scalar{V: c.Name},
-            "email": hyper.Scalar{V: c.Email},
-            "phone": hyper.Scalar{V: c.Phone},
-        },
-        Links: []hyper.Link{
-            {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "All Contacts"},
-        },
-    }
-
-    renderer.Respond(w, r, http.StatusCreated, created)
+    renderer.Respond(w, r, http.StatusCreated, contactRepresentation(c))
 }
 ```
 
-The create handler returns the full representation of the newly created resource. The CLI displays this as the created contact's detail view. A browser might redirect to the detail page. The server returns the same representation either way.
+Compare this to the original version where validation logic, field metadata, and representation construction were interleaved in a single function. The refactored handler contains no business rules and no `hyper` type construction — it delegates both concerns to the appropriate layer. Each line maps to exactly one step: decode the request, validate the input, persist the contact, respond with a representation.
 
-### 3.5 Validation Errors
+This matters because it makes the example honest about what hypermedia construction actually involves. Building a `hyper.Representation` is a mechanical mapping from domain data to wire types — it does not need to live alongside validation rules or persistence calls. A reader looking at this example for guidance will see that `contactRepresentation` and `createContactFormRepresentation` are thin, testable functions — not tangled handler code.
 
-When validation fails, the server returns a `422 Unprocessable Entity` with `Field.Error` values (§7.3):
+### 3.6 Validation Errors
+
+When validation fails, the handler calls `createContactFormRepresentation` (defined in §3.2) to build the error response. The representation layer maps `ValidationErrors` into `Field.Error` values — the handler does not need to know about field metadata or error attachment logic:
 
 ```go
-func renderValidationError(w http.ResponseWriter, r *http.Request, input any, fieldErrors map[string]string) {
-    fields := []hyper.Field{
-        {Name: "name", Type: "text", Label: "Name", Required: true},
-        {Name: "email", Type: "email", Label: "Email", Required: true},
-        {Name: "phone", Type: "tel", Label: "Phone"},
-    }
-
-    // Attach errors and submitted values to fields
-    for i, f := range fields {
-        if errMsg, ok := fieldErrors[f.Name]; ok {
-            fields[i].Error = errMsg
-        }
-        // Preserve submitted values so the client can re-display them
-        fields[i].Value = getFieldValue(input, f.Name)
-    }
-
-    rep := hyper.Representation{
-        Kind: "contact-form",
-        Self: &hyper.Target{Href: "/contacts"},
-        Actions: []hyper.Action{
-            {
-                Name:     "Create Contact",
-                Rel:      "create",
-                Method:   "POST",
-                Target:   hyper.Target{Href: "/contacts"},
-                Consumes: []string{"application/vnd.api+json"},
-                Fields:   fields,
-            },
-        },
-    }
-
-    renderer.Respond(w, r, http.StatusUnprocessableEntity, rep)
-}
+// The handler's validation error path (from §3.5) is just:
+renderer.Respond(w, r, http.StatusUnprocessableEntity,
+    createContactFormRepresentation(input, errs))
 ```
+
+For reference, `createContactFormRepresentation` builds the same representation that the original `renderValidationError` produced — fields with submitted values preserved and errors attached — but as a pure function that takes domain data in and returns a `hyper.Representation` out.
 
 On the wire (§13.3):
 
