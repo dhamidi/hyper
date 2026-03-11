@@ -23,9 +23,9 @@ The CLI starts with a single base URL and fetches the root `Representation`:
 $ cli --base http://localhost:8080/
 ```
 
-1. The client checks for stored credentials for the base URL (see [Section 12.6](#126-credential-storage)) and includes them in the request if present
-2. The client sends `GET /` with `Accept: application/json` (and `Authorization: Bearer <token>` if credentials are stored)
-3. The server returns a root `Representation` encoded per the JSON wire format (§13.3) — the representation's `Links` and `Actions` may vary based on authentication state (see [Section 12](#12-authentication))
+1. The client checks for stored credentials for the base URL (see [Section 13.6](#136-credential-storage)) and includes them in the request if present
+2. The client sends `GET /` with `Accept: application/vnd.api+json` (and `Authorization: Bearer <token>` if credentials are stored)
+3. The server returns a root `Representation` encoded per the JSON wire format (§13.3) — the representation's `Links` and `Actions` may vary based on authentication state (see [Section 13](#13-authentication))
 4. The client parses top-level `Links` and `Actions` to build a command tree
 
 > **Note:** The initial root fetch may return a limited representation if the client is not authenticated. An unauthenticated root might expose only a `login` action, while an authenticated root exposes the full set of links and actions. The CLI should always check for stored credentials before the initial request to ensure the richest possible command tree on startup.
@@ -93,9 +93,52 @@ cli
 
 Each `Link` becomes a navigable subcommand. Each `Action` becomes an executable command whose `Fields` map to flags.
 
-> **Note:** This is the *initial* command tree built from the root `Representation`. As the user navigates via `Links`, the command tree grows dynamically — each fetched `Representation` contributes its own `Links` and `Actions` as subcommands. See [Section 6: Nested Subcommands and Deep Navigation](#6-nested-subcommands-and-deep-navigation) for the full recursive algorithm.
+> **Note:** This is the *initial* command tree built from the root `Representation`. As the user navigates via `Links`, the command tree grows dynamically — each fetched `Representation` contributes its own `Links` and `Actions` as subcommands. See [Section 7: Nested Subcommands and Deep Navigation](#7-nested-subcommands-and-deep-navigation) for the full recursive algorithm.
 
-## 3. Command Mapping
+## 3. Content Type Negotiation
+
+The CLI uses content negotiation rather than hard-coding a content type. The server's advertised types — via response `Content-Type` headers and `Action.Consumes`/`Action.Produces` — drive how the CLI formats requests and parses responses.
+
+### 3.1 Content Type Strategy
+
+The CLI follows these content negotiation rules:
+
+- The CLI sends `Accept: application/vnd.api+json` as its preferred type for JSON-based hypermedia responses
+- The server's `Content-Type` response header determines how the CLI parses the response
+- `Action.Consumes` determines the `Content-Type` header for request bodies
+- `Action.Produces` (when present) hints at expected response types
+
+The CLI uses `application/vnd.api+json` rather than bare `application/json` for several reasons:
+
+- Bare `application/json` is ambiguous — it could be any JSON structure
+- `application/vnd.api+json` signals "this is a structured hypermedia JSON document"
+- The spec's JSON wire format (§13.3) defines what that structure looks like
+- Servers can serve plain `application/json` (just state, no controls) alongside `application/vnd.api+json` (full hypermedia representation)
+
+This distinction allows a server to serve different representations to different clients: a simple mobile app might request `application/json` and receive a flat state-only payload, while the CLI requests `application/vnd.api+json` and receives the full hypermedia representation with links, actions, and embedded resources.
+
+### 3.2 Accept Header Construction
+
+The CLI constructs its `Accept` header to express a preference ordering:
+
+```
+Accept: application/vnd.api+json, text/markdown;q=0.5, application/json;q=0.3
+```
+
+The CLI prefers the hypermedia JSON content type, falls back to markdown (for read-only views), and accepts plain JSON as a last resort. The quality values ensure the server selects the richest format it supports.
+
+### 3.3 Request Body Content Types
+
+`Action.Consumes` drives the request `Content-Type` header. The CLI inspects `Consumes` and selects the appropriate encoding:
+
+- `["application/vnd.api+json"]` — submit as the hypermedia JSON format
+- `["application/x-www-form-urlencoded"]` — submit as form data
+- `["multipart/form-data"]` — submit with file uploads
+- When `Consumes` is empty or absent, the CLI defaults to `application/vnd.api+json` for actions with fields, and sends no body for actions without fields
+
+For example, the `create` action on the contacts list specifies `Consumes: ["application/vnd.api+json"]`, so the CLI submits the request body with `Content-Type: application/vnd.api+json`. If the server exposed a file upload action with `Consumes: ["multipart/form-data"]`, the CLI would switch to multipart encoding instead.
+
+## 4. Command Mapping
 
 The following table defines how `hyper` types map to CLI concepts:
 
@@ -114,23 +157,24 @@ The following table defines how `hyper` types map to CLI concepts:
 | `Field.Help` | Extended flag description |
 | `Field.Value` | Default flag value |
 | `Action.Method` | Implicit — the user never sees HTTP methods |
-| `Action.Consumes` | Determines submission encoding (JSON, form-encoded) |
+| `Action.Consumes` | Request `Content-Type` header selection — determines submission encoding (`application/vnd.api+json`, form-encoded, multipart) |
+| `Action.Produces` | Response format expectation — hints at the content type the server will return |
 | `Embedded` representations | Table rows / list items in output |
 | `Representation.Kind` | Output formatter selection |
 | `Action.Hints["confirm"]` | Confirmation prompt before execution |
 | `Action.Hints["destructive"]` | Red/warning styling in terminal |
 | `Action.Hints["hidden"]` | Suppress from default command listings |
 
-## 4. Navigating a Collection
+## 5. Navigating a Collection
 
-### 4.1 Following the `contacts` Link
+### 5.1 Following the `contacts` Link
 
 When the user runs `cli contacts`, the client follows the `contacts` link discovered from the root:
 
-1. The client sends `GET /contacts` with `Accept: application/json`
+1. The client sends `GET /contacts` with `Accept: application/vnd.api+json`
 2. The server returns a contacts list `Representation` with `Embedded` items (per §6.1)
 
-### 4.2 Contacts List (Server Side)
+### 5.2 Contacts List (Server Side)
 
 ```go
 list := hyper.Representation{
@@ -145,7 +189,7 @@ list := hyper.Representation{
             Rel:      "create",
             Method:   "POST",
             Target:   hyper.Target{Href: "/contacts"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Required: true},
                 {Name: "email", Type: "email", Label: "Email", Required: true},
@@ -184,7 +228,7 @@ list := hyper.Representation{
 }
 ```
 
-### 4.3 Contacts List (JSON Wire Format)
+### 5.3 Contacts List (JSON Wire Format)
 
 ```json
 {
@@ -199,7 +243,7 @@ list := hyper.Representation{
       "rel": "create",
       "method": "POST",
       "href": "/contacts",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "name", "type": "text", "label": "Name", "required": true},
         {"name": "email", "type": "email", "label": "Email", "required": true},
@@ -230,7 +274,7 @@ list := hyper.Representation{
 }
 ```
 
-### 4.4 CLI Output
+### 5.4 CLI Output
 
 The CLI renders `Embedded` items from the `"items"` slot as a table and lists available actions:
 
@@ -254,13 +298,13 @@ Navigate to a contact:
 
 Each embedded `Representation` carries its own `Self` `Target`, `Links`, and `Actions`, enabling the CLI to offer follow-up navigation per item.
 
-## 5. Viewing a Single Resource
+## 6. Viewing a Single Resource
 
-### 5.1 Following an Item Link
+### 6.1 Following an Item Link
 
 When the user runs `cli contacts show 1`, the client resolves the `Self` target of the embedded item and fetches `/contacts/1`.
 
-### 5.2 Single Contact (Server Side)
+### 6.2 Single Contact (Server Side)
 
 ```go
 contact := hyper.Representation{
@@ -285,7 +329,7 @@ contact := hyper.Representation{
             Rel:      "update",
             Method:   "PUT",
             Target:   hyper.Target{Href: "/contacts/1"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
                 {Name: "email", Type: "email", Label: "Email", Value: "ada@example.com", Required: true},
@@ -306,7 +350,7 @@ contact := hyper.Representation{
 }
 ```
 
-### 5.3 Single Contact (JSON Wire Format)
+### 6.3 Single Contact (JSON Wire Format)
 
 ```json
 {
@@ -328,7 +372,7 @@ contact := hyper.Representation{
       "rel": "update",
       "method": "PUT",
       "href": "/contacts/1",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "name", "type": "text", "label": "Name", "value": "Ada Lovelace", "required": true},
         {"name": "email", "type": "email", "label": "Email", "value": "ada@example.com", "required": true},
@@ -349,7 +393,7 @@ contact := hyper.Representation{
 }
 ```
 
-### 5.4 CLI Output
+### 6.4 CLI Output
 
 The CLI renders `State` as key-value pairs and lists available actions as subcommands:
 
@@ -370,11 +414,11 @@ Navigate:
   contacts  All Contacts (cli contacts)
 ```
 
-## 6. Nested Subcommands and Deep Navigation
+## 7. Nested Subcommands and Deep Navigation
 
 The examples so far show a flat command tree: `cli contacts`, `cli contacts show 1`. Real APIs have nested resources — a contact has notes, a note has attachments. The hypermedia-driven CLI handles arbitrary nesting by following `Links` discovered at each level. The CLI never hard-codes nesting depth; each navigation step applies the same algorithm to whatever `Representation` the server returns.
 
-### 6.1 Nested Resource Discovery
+### 7.1 Nested Resource Discovery
 
 When the server returns a single contact `Representation`, it can expose `Links` to sub-resources alongside its existing `Actions`. Here the contact carries links to its notes and tags:
 
@@ -397,7 +441,7 @@ contact := hyper.Representation{
             Rel:      "update",
             Method:   "PUT",
             Target:   hyper.Target{Href: "/contacts/1"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "Ada Lovelace", Required: true},
                 {Name: "email", Type: "email", Label: "Email", Value: "ada@example.com", Required: true},
@@ -435,7 +479,7 @@ On the wire (§13.3):
       "rel": "update",
       "method": "PUT",
       "href": "/contacts/1",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "name", "type": "text", "label": "Name", "value": "Ada Lovelace", "required": true},
         {"name": "email", "type": "email", "label": "Email", "value": "ada@example.com", "required": true}
@@ -464,11 +508,11 @@ cli contacts show 1
 
 Each `Link` becomes a navigable subcommand that will fetch a new `Representation` and repeat the process. Each `Action` becomes an executable command with flags derived from its `Fields`.
 
-### 6.2 Following Nested Links
+### 7.2 Following Nested Links
 
 When the user runs `cli contacts 1 notes`, the CLI follows the `notes` link from the contact `Representation`:
 
-1. The client sends `GET /contacts/1/notes` with `Accept: application/json`
+1. The client sends `GET /contacts/1/notes` with `Accept: application/vnd.api+json`
 2. The server returns a notes list `Representation` with its own `Embedded` items, `Actions`, and `Links`
 
 #### Notes List (Server Side)
@@ -486,7 +530,7 @@ notesList := hyper.Representation{
             Rel:      "create",
             Method:   "POST",
             Target:   hyper.Target{Href: "/contacts/1/notes"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "title", Type: "text", Label: "Title", Required: true},
                 {Name: "body", Type: "text", Label: "Body", Required: true},
@@ -539,7 +583,7 @@ notesList := hyper.Representation{
       "rel": "create",
       "method": "POST",
       "href": "/contacts/1/notes",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "title", "type": "text", "label": "Title", "required": true},
         {"name": "body", "type": "text", "label": "Body", "required": true}
@@ -594,7 +638,7 @@ Navigate to a note:
 
 The notes list `Representation` is structurally identical to the contacts list — it has `Embedded` items, `Actions`, and `Links`. The CLI applies the same rendering and command-building logic at every level.
 
-### 6.3 Deeply Nested Navigation
+### 7.3 Deeply Nested Navigation
 
 When the user runs `cli contacts 1 notes 3`, the CLI resolves the `Self` target of the embedded note and fetches `/contacts/1/notes/3`:
 
@@ -623,7 +667,7 @@ note := hyper.Representation{
             Rel:      "update",
             Method:   "PUT",
             Target:   hyper.Target{Href: "/contacts/1/notes/3"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "title", Type: "text", Label: "Title", Value: "Meeting notes", Required: true},
                 {Name: "body", Type: "text", Label: "Body", Value: "Discussed the *analytical engine* project timeline.", Required: true},
@@ -662,7 +706,7 @@ note := hyper.Representation{
       "rel": "update",
       "method": "PUT",
       "href": "/contacts/1/notes/3",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "title", "type": "text", "label": "Title", "value": "Meeting notes", "required": true},
         {"name": "body", "type": "text", "label": "Body", "value": "Discussed the *analytical engine* project timeline.", "required": true}
@@ -700,7 +744,7 @@ Navigate:
 
 The note `Representation` carries its own `Links` back to the notes list and the parent contact, plus its own `Actions` for editing and deleting. The CLI constructs all of this from the server response — it has no built-in knowledge of the contact/note relationship.
 
-### 6.4 Command Tree Construction Algorithm
+### 7.4 Command Tree Construction Algorithm
 
 The CLI uses a single recursive algorithm for every navigation step:
 
@@ -753,7 +797,7 @@ func buildCommands(rep hyper.Representation) *CommandGroup {
 
 The critical insight: the CLI never hard-codes nesting depth. Whether the user navigates to `cli contacts`, `cli contacts 1 notes`, or `cli contacts 1 notes 3 attachments`, each step is the same algorithm applied to whatever `Representation` the server returns. The server controls the shape of the resource hierarchy through the `Links` it includes in each response.
 
-### 6.5 Breadcrumb / Path Display
+### 7.5 Breadcrumb / Path Display
 
 The interactive REPL prompt reflects nesting depth using the `Representation.Kind` and `Self.Href` at each level. As the user navigates deeper, the prompt updates to show the current position in the resource hierarchy:
 
@@ -774,7 +818,7 @@ Each prompt segment is derived from the current `Representation`:
 - `Self.Href` provides the path (e.g., `/contacts/1/notes`)
 - `back` pops the navigation stack and returns to the previous `Representation`
 
-### 6.6 CLI Output for Nested Resources
+### 7.6 CLI Output for Nested Resources
 
 The CLI output for `cli contacts 1 notes` follows the same pattern as any collection — `Embedded` items render as a table, `Actions` list as available commands, and `Links` provide navigation options:
 
@@ -799,11 +843,11 @@ Navigate to a note:
   cli contacts 1 notes show <id>
 ```
 
-The output structure is identical to the top-level contacts list (Section 4.4). The CLI uses the same rendering logic regardless of nesting depth — the `Representation.Kind` selects the formatter, `Embedded["items"]` provides the table rows, `Actions` list the available mutations, and `Links` offer navigation back to the parent resource.
+The output structure is identical to the top-level contacts list (Section 5.4). The CLI uses the same rendering logic regardless of nesting depth — the `Representation.Kind` selects the formatter, `Embedded["items"]` provides the table rows, `Actions` list the available mutations, and `Links` offer navigation back to the parent resource.
 
-## 7. Executing Actions
+## 8. Executing Actions
 
-### 7.1 Create
+### 8.1 Create
 
 The `create` `Action` is discovered on the contacts list `Representation` (§7.2). Its `Fields` map to CLI flags:
 
@@ -816,11 +860,11 @@ The CLI:
 1. Finds the `Action` with `Rel: "create"` on the contacts list `Representation`
 2. Maps `--name` and `--email` to `Field` values
 3. Validates that required `Fields` (`name`, `email`) are present
-4. Submits a JSON body (from `Action.Consumes: ["application/json"]`) to the `Action.Target`:
+4. Submits a JSON body (from `Action.Consumes: ["application/vnd.api+json"]`) to the `Action.Target`:
 
 ```
 POST /contacts
-Content-Type: application/json
+Content-Type: application/vnd.api+json
 
 {"name": "Alan Turing", "email": "alan@example.com"}
 ```
@@ -833,7 +877,7 @@ Created contact #3
   Email: alan@example.com
 ```
 
-### 7.2 Update
+### 8.2 Update
 
 The `update` `Action` is discovered on the single contact `Representation`. `Field.Value` provides defaults so the user only needs to specify fields being changed:
 
@@ -851,14 +895,14 @@ The CLI:
 
 ```
 PUT /contacts/1
-Content-Type: application/json
+Content-Type: application/vnd.api+json
 
 {"name": "Ada Lovelace", "email": "ada.lovelace@example.com", "phone": "+1-555-0100"}
 ```
 
 6. Displays the updated resource from the response.
 
-### 7.3 Delete
+### 8.3 Delete
 
 The `delete` `Action` carries `Hints` (§15.6) that affect CLI behavior:
 
@@ -882,7 +926,7 @@ Deleted contact #1.
 
 If the user declines, the CLI exits without sending a request. If `Hints["hidden"]` were `true`, the action would not appear in default action listings but could still be invoked explicitly.
 
-## 8. Search as a GET Action with Fields
+## 9. Search as a GET Action with Fields
 
 The root `Representation` exposes a `Search` `Action` with `Method: "GET"` and a `Field` for the query parameter:
 
@@ -894,9 +938,9 @@ The CLI:
 
 1. Finds the `Action` with `Rel: "search"` on the root `Representation`
 2. Since `Method` is `GET`, maps `Fields` to query parameters instead of a request body
-3. Sends `GET /search?q=Ada` with `Accept: application/json`
+3. Sends `GET /search?q=Ada` with `Accept: application/vnd.api+json`
 
-### 8.1 Search Results (Server Side)
+### 9.1 Search Results (Server Side)
 
 ```go
 results := hyper.Representation{
@@ -921,7 +965,7 @@ results := hyper.Representation{
 }
 ```
 
-### 8.2 Search Results (JSON Wire Format)
+### 9.2 Search Results (JSON Wire Format)
 
 ```json
 {
@@ -940,7 +984,7 @@ results := hyper.Representation{
 }
 ```
 
-### 8.3 CLI Output
+### 9.3 CLI Output
 
 ```
 $ cli search --q "Ada"
@@ -953,7 +997,7 @@ Search results for "Ada"
 └────┴────────────────┴───────────────────┘
 ```
 
-## 9. Interactive Mode
+## 10. Interactive Mode
 
 When invoked with no arguments, the CLI enters an interactive REPL that mirrors the hypermedia navigation model:
 
@@ -1034,19 +1078,19 @@ Key behaviors:
 - `Action.Hints["hidden"]` actions are omitted from `help` output but remain invocable
 - Nested navigation works identically to top-level navigation — each `Representation` defines the available commands at that level
 
-## 10. Output Formatting
+## 11. Output Formatting
 
 The CLI supports multiple output modes, driven by the `Representation` and user flags:
 
-### 10.1 Default Formatting
+### 11.1 Default Formatting
 
 - **Collections** (`Embedded` with `"items"` slot): rendered as tables, with columns inferred from the `State` keys of the first embedded `Representation`
 - **Single resources**: rendered as key-value pairs
 - **`Representation.Kind`** can select specialized formatters — a kind of `"contact"` might use a contact-specific layout, while an unrecognized kind falls back to generic formatting
 
-### 10.2 `--json` Flag
+### 11.2 `--json` Flag
 
-Outputs the raw JSON wire format (§13.3) as received from the server:
+Outputs the raw response body as received from the server. When the server responds with `application/vnd.api+json`, this is the full hypermedia representation including links, actions, and embedded resources. When the server responds with `application/json`, it may be a reduced state-only payload without hypermedia controls.
 
 ```
 $ cli contacts --json
@@ -1057,7 +1101,7 @@ $ cli contacts --json
 }
 ```
 
-### 10.3 `--markdown` Flag
+### 11.3 `--markdown` Flag
 
 Requests `Accept: text/markdown` from the server, which triggers the Markdown codec (§12):
 
@@ -1071,7 +1115,7 @@ $ cli contacts show 1 --markdown
 - **Bio:** Wrote the *first* algorithm intended for a machine.
 ```
 
-### 10.4 Kind-Based Formatting
+### 11.4 Kind-Based Formatting
 
 The `Representation.Kind` field allows the CLI to register specialized formatters:
 
@@ -1092,9 +1136,9 @@ func render(rep Representation) {
 }
 ```
 
-## 11. Error Handling
+## 12. Error Handling
 
-### 11.1 HTTP Errors
+### 12.1 HTTP Errors
 
 When the server returns an error status, the CLI displays the status code and any error `Representation` body:
 
@@ -1105,7 +1149,7 @@ Error 404: Not Found
   Contact not found.
 ```
 
-### 11.2 Validation Errors
+### 12.2 Validation Errors
 
 When the server returns `422 Unprocessable Entity`, it includes a `Representation` whose `Action.Fields` carry `Field.Error` values (§7.3):
 
@@ -1119,7 +1163,7 @@ validationRep := hyper.Representation{
             Rel:      "create",
             Method:   "POST",
             Target:   hyper.Target{Href: "/contacts"},
-            Consumes: []string{"application/json"},
+            Consumes: []string{"application/vnd.api+json"},
             Fields: []hyper.Field{
                 {Name: "name", Type: "text", Label: "Name", Value: "", Required: true, Error: "Name is required"},
                 {Name: "email", Type: "email", Label: "Email", Value: "not-an-email", Required: true, Error: "Invalid email address"},
@@ -1142,7 +1186,7 @@ The JSON wire format:
       "rel": "create",
       "method": "POST",
       "href": "/contacts",
-      "consumes": ["application/json"],
+      "consumes": ["application/vnd.api+json"],
       "fields": [
         {"name": "name", "type": "text", "label": "Name", "value": "", "required": true, "error": "Name is required"},
         {"name": "email", "type": "email", "label": "Email", "value": "not-an-email", "required": true, "error": "Invalid email address"},
@@ -1163,7 +1207,7 @@ Validation failed:
   --email: Invalid email address
 ```
 
-### 11.3 Network Errors
+### 12.3 Network Errors
 
 When the server is unreachable, the CLI reports the connection failure and suggests retrying:
 
@@ -1174,11 +1218,11 @@ Error: could not connect to http://localhost:8080/contacts
   Connection refused. Is the server running?
 ```
 
-## 12. Authentication
+## 13. Authentication
 
 A hypermedia-driven CLI discovers authentication affordances the same way it discovers everything else: through `Links` and `Actions` on the root `Representation`. The server controls what is available based on auth state — an unauthenticated root representation exposes a `login` action, while an authenticated one exposes a `logout` action and additional protected links.
 
-### 12.1 Unauthenticated Root Representation
+### 13.1 Unauthenticated Root Representation
 
 When the CLI connects without stored credentials, the server returns a root `Representation` with limited affordances:
 
@@ -1239,7 +1283,7 @@ cli
 
 The only available command is `login`. Protected resources like `contacts` are not exposed — the server simply omits those `Links` and `Actions` from the representation.
 
-### 12.2 Login Flow
+### 13.2 Login Flow
 
 The user authenticates with `cli login --username ada --password secret`:
 
@@ -1282,7 +1326,7 @@ The JSON wire format:
 
 The CLI stores the token keyed by base URL and follows the `root` link to re-fetch the root representation with the new credential.
 
-### 12.3 Authenticated Root Representation
+### 13.3 Authenticated Root Representation
 
 After login, the CLI re-fetches the root with `Authorization: Bearer eyJhbGci...`. The server now returns a richer `Representation` with protected links and a `logout` action:
 
@@ -1368,7 +1412,7 @@ cli
 
 The `login` action is no longer present — the server omits it for authenticated clients. The `logout` action appears with a `confirm` hint (§15.6) that the CLI uses to prompt the user before executing.
 
-### 12.4 Logout Flow
+### 13.4 Logout Flow
 
 The user logs out with `cli logout`:
 
@@ -1384,7 +1428,7 @@ Are you sure you want to log out? [y/N] y
 Logged out successfully.
 ```
 
-### 12.5 Token Refresh and Expiry
+### 13.5 Token Refresh and Expiry
 
 #### 401 Responses
 
@@ -1471,7 +1515,7 @@ loginResult := hyper.Representation{
 
 When the CLI detects that `expires_at` is approaching, it submits the `refresh` action automatically. The server returns a new auth-token `Representation` with an updated token and expiry. The CLI stores the new token and continues without interrupting the user.
 
-### 12.6 Credential Storage
+### 13.6 Credential Storage
 
 The CLI manages credentials locally with the following conventions:
 
@@ -1480,7 +1524,7 @@ The CLI manages credentials locally with the following conventions:
 - The `--token` flag allows passing a bearer token directly for scripting and CI/CD use cases, bypassing the interactive login flow: `cli --token eyJhbGci... contacts`
 - Stored tokens are included in all subsequent requests as `Authorization: Bearer <token>` headers
 
-### 12.7 Interactive Mode Auth
+### 13.7 Interactive Mode Auth
 
 The interactive REPL reflects auth state changes in real time. When the user logs in, the available commands update immediately:
 
@@ -1503,9 +1547,9 @@ Available commands:
   logout      Log out
 ```
 
-The REPL re-fetches the root representation after login and rebuilds the command tree. The same happens after logout — the command tree collapses back to just `login`. This is the same discovery mechanism described in [Section 2](#2-discovery-flow) and [Section 9](#9-interactive-mode), applied to auth state transitions.
+The REPL re-fetches the root representation after login and rebuilds the command tree. The same happens after logout — the command tree collapses back to just `login`. This is the same discovery mechanism described in [Section 2](#2-discovery-flow) and [Section 10](#10-interactive-mode), applied to auth state transitions.
 
-## 13. Representations and Types Exercised
+## 14. Representations and Types Exercised
 
 This use case exercises the following `hyper` types:
 
@@ -1522,11 +1566,12 @@ This use case exercises the following `hyper` types:
 | `Value` (`Scalar`, `RichText`) | Primitive fields, bio content, and note body content |
 | JSON `RepresentationCodec` | Primary codec for all CLI communication (§13) |
 | `Action.Hints` | CLI-specific keys: `confirm`, `destructive`, `hidden` (§15.6) |
-| `Action.Consumes` | Drives the submission content type for login (`application/vnd.api+json`) |
+| `Action.Consumes` | Determines request body content type — `application/vnd.api+json` for hypermedia JSON submissions, `application/x-www-form-urlencoded` for form data, `multipart/form-data` for file uploads |
+| `Action.Produces` | Hints at expected response content type — helps the CLI anticipate response format |
 | `Field.Type: "password"` | Masked interactive input — the CLI prompts without echoing characters when this field type is encountered |
 | `Meta` | Could carry pagination info, total counts (gap identified below) |
 
-## 14. Spec Feedback
+## 15. Spec Feedback
 
 After playing through the full contacts CLI scenario, the following gaps and questions emerge:
 
@@ -1551,3 +1596,9 @@ After playing through the full contacts CLI scenario, the following gaps and que
 - **Auth-driven representation variation.** The spec should clarify that servers MAY return different `Links` and `Actions` based on the client's authentication state. This is implicit in the hypermedia model — the server is always free to tailor the representation — but worth stating explicitly. A server that omits the `contacts` link for unauthenticated clients and includes a `login` action is behaving correctly, and clients should expect the set of affordances to change between requests as auth state evolves.
 
 - **Standard hint for auth-required actions.** Should there be a hint key like `"auth-required": true` on actions that will fail without authentication? This would let a CLI pre-check and prompt for login before attempting the action, rather than waiting for a 401 response. Without this, the client must either attempt the action optimistically and handle the 401, or infer auth requirements from the absence of the action in unauthenticated representations. A standard hint key would make this explicit.
+
+- **Recommended JSON content type.** The spec's JSON codec section (§13) does not specify a media type identifier for the `hyper` JSON wire format. The spec SHOULD recommend `application/vnd.api+json` as the content type for JSON representations that include full hypermedia controls (links, actions, embedded). This distinguishes hypermedia-aware JSON responses from plain `application/json` data payloads. Servers that support both can use content negotiation to serve the appropriate format.
+
+- **Default `Consumes` behavior.** The spec does not state what content type a client should assume when `Action.Consumes` is empty. The spec SHOULD clarify: when `Consumes` is absent, clients SHOULD default to `application/vnd.api+json` for actions with fields, and send no body for actions without fields.
+
+- **Content type and codec selection.** The spec should clarify how `Action.Consumes` and `Action.Produces` relate to the codec system (§9). When a client sees `Consumes: ["application/vnd.api+json"]`, it should use the JSON `SubmissionCodec` to encode the request body. The spec should state this relationship explicitly.
