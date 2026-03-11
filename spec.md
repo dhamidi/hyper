@@ -722,8 +722,159 @@ A conforming implementation SHOULD:
 3. provide a JSON hypermedia codec
 4. provide renderer helpers for negotiated and explicit response formats
 5. support field-level validation feedback in action fields
+6. define the extension interfaces specified in section 16
 
-## 16. Open Questions
+## 16. Extensibility (Draft)
+
+This section is a **draft** and subject to change.
+
+Existing Go types SHOULD be able to participate in the hypermedia system by
+implementing narrow, opt-in interfaces. Each interface maps to a single concern
+so that a type can adopt only the extension points that are relevant to it.
+
+### 16.1 Extension Interfaces
+
+#### 16.1.1 RepresentationProvider
+
+A type that can present itself as a complete `Representation`.
+
+```go
+type RepresentationProvider interface {
+    HyperRepresentation() Representation
+}
+```
+
+When a codec or renderer encounters a value implementing
+`RepresentationProvider`, it SHOULD call `HyperRepresentation()` to obtain the
+full hypermedia representation, including state, links, actions, and embedded
+representations.
+
+#### 16.1.2 NodeProvider
+
+A type that can express its state as a `Node`.
+
+```go
+type NodeProvider interface {
+    HyperNode() Node
+}
+```
+
+This allows domain types to supply structured state for the `State` field of a
+`Representation` without being modified to implement `Node` directly.
+
+#### 16.1.3 ValueProvider
+
+A type that can express itself as a `Value`.
+
+```go
+type ValueProvider interface {
+    HyperValue() Value
+}
+```
+
+This allows leaf domain values (e.g. custom identifiers, enumerations, money
+types) to participate in `Object` or `Collection` containers without
+wrapping in `Scalar`.
+
+#### 16.1.4 LinkProvider
+
+A type that can contribute navigational links.
+
+```go
+type LinkProvider interface {
+    HyperLinks() []Link
+}
+```
+
+When constructing a `Representation` from an existing domain type, the builder
+or codec SHOULD merge links returned by `HyperLinks()` into the
+representation's `Links` slice.
+
+#### 16.1.5 ActionProvider
+
+A type that can contribute available actions.
+
+```go
+type ActionProvider interface {
+    HyperActions() []Action
+}
+```
+
+When constructing a `Representation` from an existing domain type, the builder
+or codec SHOULD merge actions returned by `HyperActions()` into the
+representation's `Actions` slice.
+
+### 16.2 Composition Rules
+
+A single type MAY implement any combination of these interfaces. When a type
+implements multiple provider interfaces, the following precedence SHOULD apply:
+
+1. If a type implements `RepresentationProvider`, its
+   `HyperRepresentation()` result SHOULD be used as the primary representation.
+   Other provider interfaces on the same type MAY be ignored because the
+   returned `Representation` is assumed to be complete.
+2. If a type does not implement `RepresentationProvider` but implements
+   `NodeProvider`, the result of `HyperNode()` SHOULD be used as the `State`
+   of a constructed `Representation`.
+3. `LinkProvider` and `ActionProvider` SHOULD be consulted independently to
+   populate `Links` and `Actions` when building a representation from parts.
+
+### 16.3 Discovery by Codecs and Renderers
+
+Codecs and renderers SHOULD use Go type assertions to discover provider
+interfaces on values passed to them. They MUST NOT require reflection or code
+generation.
+
+Example:
+
+```go
+func buildRepresentation(v any) Representation {
+    if rp, ok := v.(RepresentationProvider); ok {
+        return rp.HyperRepresentation()
+    }
+
+    rep := Representation{}
+
+    if np, ok := v.(NodeProvider); ok {
+        rep.State = np.HyperNode()
+    }
+    if lp, ok := v.(LinkProvider); ok {
+        rep.Links = lp.HyperLinks()
+    }
+    if ap, ok := v.(ActionProvider); ok {
+        rep.Actions = ap.HyperActions()
+    }
+
+    return rep
+}
+```
+
+### 16.4 Requirements
+
+- Extension interfaces MUST be optional; types that do not implement them
+  SHALL continue to work through manual `Representation` construction.
+- Provider methods MUST be safe to call concurrently and MUST NOT cause side
+  effects.
+- Provider methods SHOULD return new slices and structs rather than shared
+  mutable state.
+- Implementations MUST NOT use reflection to discover these interfaces;
+  standard Go type assertions SHALL be used.
+
+### 16.5 Compliance
+
+A conforming implementation of `hyper` SHOULD:
+
+1. define the extension interfaces listed above
+2. check for provider interfaces via type assertion in codecs and renderers
+3. document which interfaces are consulted at each stage of encoding
+
+A conforming implementation MAY:
+
+1. define additional provider interfaces beyond those listed here
+2. accept provider interfaces on values nested inside `Object` and
+   `Collection` containers
+
+## 17. Open Questions
 
 The following questions remain open for later revisions:
 
@@ -731,3 +882,6 @@ The following questions remain open for later revisions:
 2. whether `Object` and `Collection` should remain minimal or grow helper APIs
 3. whether JSON support should target a specific hypermedia media type first
 4. how much fragment-targeting behavior should be standardized for `htmx`
+5. whether additional provider interfaces (e.g. `EmbeddedProvider`,
+   `MetaProvider`) should be added to the extensibility surface
+6. whether provider interfaces should accept a `context.Context` parameter
