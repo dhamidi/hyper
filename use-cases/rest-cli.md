@@ -1571,7 +1571,674 @@ This use case exercises the following `hyper` types:
 | `Field.Type: "password"` | Masked interactive input — the CLI prompts without echoing characters when this field type is encountered |
 | `Meta` | Could carry pagination info, total counts (gap identified below) |
 
-## 15. Spec Feedback
+## 15. Alternative: Non-CRUD Operations as Resources
+
+The contacts scenario so far covers standard CRUD — create, update, delete, list, show. Real applications also need operations like archiving, merging, and exporting. Rather than introducing a new pattern, this section explores modelling every operation as a standard CRUD action on a new resource type. The philosophy is "everything is a resource": an archive is not a verb applied to a contact, but a first-class entity you create, list, view, and delete. This approach requires no new `Action` patterns — every operation is a `POST` to create a new resource, discovered through `Links` on existing `Representations`.
+
+### 15.1 Discovering Operation Resources
+
+The contacts list `Representation` gains `Links` to the sub-resource collections for archives, merges, and exports. The CLI discovers these as navigable subcommands through the standard link-following algorithm (see [Section 7](#7-nested-subcommands-and-deep-navigation)).
+
+#### 15.1.1 Enhanced Contacts List (Server Side)
+
+```go
+list := hyper.Representation{
+    Kind: "contact-list",
+    Self: &hyper.Target{Href: "/contacts"},
+    Links: []hyper.Link{
+        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+        {Rel: "archives", Target: hyper.Target{Href: "/contacts/archives"}, Title: "Archives"},
+        {Rel: "merges", Target: hyper.Target{Href: "/contacts/merges"}, Title: "Merges"},
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "Exports"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Create Contact",
+            Rel:      "create",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "name", Type: "text", Label: "Name", Required: true},
+                {Name: "email", Type: "email", Label: "Email", Required: true},
+                {Name: "phone", Type: "tel", Label: "Phone"},
+            },
+        },
+    },
+    // Embedded items omitted for brevity — same as Section 5.2
+}
+```
+
+#### 15.1.2 Enhanced Contacts List (JSON Wire Format)
+
+```json
+{
+  "kind": "contact-list",
+  "self": {"href": "/contacts"},
+  "links": [
+    {"rel": "root", "href": "/", "title": "Home"},
+    {"rel": "archives", "href": "/contacts/archives", "title": "Archives"},
+    {"rel": "merges", "href": "/contacts/merges", "title": "Merges"},
+    {"rel": "exports", "href": "/contacts/exports", "title": "Exports"}
+  ],
+  "actions": [
+    {
+      "name": "Create Contact",
+      "rel": "create",
+      "method": "POST",
+      "href": "/contacts",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {"name": "name", "type": "text", "label": "Name", "required": true},
+        {"name": "email", "type": "email", "label": "Email", "required": true},
+        {"name": "phone", "type": "tel", "label": "Phone"}
+      ]
+    }
+  ]
+}
+```
+
+### 15.2 Archive as a Resource
+
+An archive is a first-class resource. Creating an archive moves the specified contacts into an archived state as a side effect. The archive resource is browsable, and deleting it restores the contacts — making the operation undo-able.
+
+#### 15.2.1 Archives Collection (Server Side)
+
+```go
+archives := hyper.Representation{
+    Kind: "archive-list",
+    Self: &hyper.Target{Href: "/contacts/archives"},
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Archive Contacts",
+            Rel:      "create",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts/archives"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {
+                    Name:     "contacts",
+                    Type:     "text",
+                    Label:    "Contact IDs",
+                    Help:     "Comma-separated list of contact IDs to archive",
+                    Required: true,
+                },
+            },
+        },
+    },
+    Embedded: map[string][]hyper.Representation{
+        "items": {
+            {
+                Kind: "archive",
+                Self: &hyper.Target{Href: "/contacts/archives/1"},
+                State: hyper.Object{
+                    "id":         hyper.Scalar{V: 1},
+                    "created_at": hyper.Scalar{V: "2025-06-15T10:30:00Z"},
+                    "contacts":   hyper.Scalar{V: "Ada Lovelace, Grace Hopper"},
+                },
+                Links: []hyper.Link{
+                    {Rel: "self", Target: hyper.Target{Href: "/contacts/archives/1"}, Title: "Archive #1"},
+                },
+            },
+        },
+    },
+}
+```
+
+#### 15.2.2 Archives Collection (JSON Wire Format)
+
+```json
+{
+  "kind": "archive-list",
+  "self": {"href": "/contacts/archives"},
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "Contacts"}
+  ],
+  "actions": [
+    {
+      "name": "Archive Contacts",
+      "rel": "create",
+      "method": "POST",
+      "href": "/contacts/archives",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {
+          "name": "contacts",
+          "type": "text",
+          "label": "Contact IDs",
+          "help": "Comma-separated list of contact IDs to archive",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "embedded": {
+    "items": [
+      {
+        "kind": "archive",
+        "self": {"href": "/contacts/archives/1"},
+        "state": {
+          "id": 1,
+          "created_at": "2025-06-15T10:30:00Z",
+          "contacts": "Ada Lovelace, Grace Hopper"
+        },
+        "links": [
+          {"rel": "self", "href": "/contacts/archives/1", "title": "Archive #1"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 15.2.3 Single Archive with Undo (Server Side)
+
+The individual archive resource carries a `delete` `Action` with a `confirm` hint (§15.6). Deleting the archive restores the archived contacts to their previous state.
+
+```go
+archive := hyper.Representation{
+    Kind: "archive",
+    Self: &hyper.Target{Href: "/contacts/archives/1"},
+    State: hyper.Object{
+        "id":          hyper.Scalar{V: 1},
+        "created_at":  hyper.Scalar{V: "2025-06-15T10:30:00Z"},
+        "contact_ids": hyper.Scalar{V: []int{1, 2}},
+        "contacts":    hyper.Scalar{V: "Ada Lovelace, Grace Hopper"},
+    },
+    Links: []hyper.Link{
+        {Rel: "archives", Target: hyper.Target{Href: "/contacts/archives"}, Title: "All Archives"},
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Restore Contacts",
+            Rel:    "delete",
+            Method: "DELETE",
+            Target: hyper.Target{Href: "/contacts/archives/1"},
+            Hints: map[string]any{
+                "confirm": "This will restore 2 contacts and remove this archive. Continue?",
+            },
+        },
+    },
+}
+```
+
+#### 15.2.4 CLI Interaction
+
+```
+$ cli contacts archives
+Archives
+┌────┬─────────────────────┬────────────────────────────┐
+│ ID │ Created             │ Contacts                   │
+├────┼─────────────────────┼────────────────────────────┤
+│  1 │ 2025-06-15T10:30:00 │ Ada Lovelace, Grace Hopper │
+└────┴─────────────────────┴────────────────────────────┘
+
+Available actions:
+  create    Archive contacts (cli contacts archives create --contacts CONTACTS)
+
+Navigate to an archive:
+  cli contacts archives show <id>
+
+$ cli contacts archives create --contacts 1,2
+Archive created.
+
+  ID:       2
+  Contacts: Ada Lovelace, Grace Hopper
+
+$ cli contacts archives show 1
+Archive #1
+  ID:          1
+  Created:     2025-06-15T10:30:00Z
+  Contact IDs: [1, 2]
+  Contacts:    Ada Lovelace, Grace Hopper
+
+Available actions:
+  delete    Restore contacts (cli contacts archives delete 1) [confirm]
+
+$ cli contacts archives delete 1
+? This will restore 2 contacts and remove this archive. Continue? (y/N) y
+Archive deleted. Contacts restored.
+```
+
+### 15.3 Merge as a Resource
+
+A merge records which contacts were combined and what the result was. The merge resource is immutable — it has no `update` or `delete` `Actions` — and serves as an audit trail.
+
+#### 15.3.1 Merges Collection (Server Side)
+
+```go
+merges := hyper.Representation{
+    Kind: "merge-list",
+    Self: &hyper.Target{Href: "/contacts/merges"},
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Merge Contacts",
+            Rel:      "create",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts/merges"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {
+                    Name:     "sources",
+                    Type:     "text",
+                    Label:    "Source Contact IDs",
+                    Help:     "Comma-separated IDs of contacts to merge into the target",
+                    Required: true,
+                },
+                {
+                    Name:     "target",
+                    Type:     "text",
+                    Label:    "Target Contact ID",
+                    Help:     "The contact that absorbs the others",
+                    Required: true,
+                },
+            },
+        },
+    },
+    Embedded: map[string][]hyper.Representation{
+        "items": {
+            {
+                Kind: "merge",
+                Self: &hyper.Target{Href: "/contacts/merges/1"},
+                State: hyper.Object{
+                    "id":         hyper.Scalar{V: 1},
+                    "created_at": hyper.Scalar{V: "2025-07-01T14:00:00Z"},
+                    "target":     hyper.Scalar{V: "Ada Lovelace (#1)"},
+                    "sources":    hyper.Scalar{V: "Grace Hopper (#2), Charles Babbage (#3)"},
+                },
+                Links: []hyper.Link{
+                    {Rel: "self", Target: hyper.Target{Href: "/contacts/merges/1"}, Title: "Merge #1"},
+                },
+            },
+        },
+    },
+}
+```
+
+#### 15.3.2 Merges Collection (JSON Wire Format)
+
+```json
+{
+  "kind": "merge-list",
+  "self": {"href": "/contacts/merges"},
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "Contacts"}
+  ],
+  "actions": [
+    {
+      "name": "Merge Contacts",
+      "rel": "create",
+      "method": "POST",
+      "href": "/contacts/merges",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {
+          "name": "sources",
+          "type": "text",
+          "label": "Source Contact IDs",
+          "help": "Comma-separated IDs of contacts to merge into the target",
+          "required": true
+        },
+        {
+          "name": "target",
+          "type": "text",
+          "label": "Target Contact ID",
+          "help": "The contact that absorbs the others",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "embedded": {
+    "items": [
+      {
+        "kind": "merge",
+        "self": {"href": "/contacts/merges/1"},
+        "state": {
+          "id": 1,
+          "created_at": "2025-07-01T14:00:00Z",
+          "target": "Ada Lovelace (#1)",
+          "sources": "Grace Hopper (#2), Charles Babbage (#3)"
+        },
+        "links": [
+          {"rel": "self", "href": "/contacts/merges/1", "title": "Merge #1"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 15.3.3 Single Merge Resource (Server Side)
+
+The merge resource provides a detailed audit record. It has no mutation `Actions` — it is read-only by design.
+
+```go
+merge := hyper.Representation{
+    Kind: "merge",
+    Self: &hyper.Target{Href: "/contacts/merges/1"},
+    State: hyper.Object{
+        "id":         hyper.Scalar{V: 1},
+        "created_at": hyper.Scalar{V: "2025-07-01T14:00:00Z"},
+        "target_id":  hyper.Scalar{V: 1},
+        "source_ids": hyper.Scalar{V: []int{2, 3}},
+        "result": hyper.Object{
+            "kept_name":    hyper.Scalar{V: "Ada Lovelace"},
+            "kept_email":   hyper.Scalar{V: "ada@example.com"},
+            "merged_phone": hyper.Scalar{V: "+1-555-0200 (from Grace Hopper)"},
+        },
+    },
+    Links: []hyper.Link{
+        {Rel: "merges", Target: hyper.Target{Href: "/contacts/merges"}, Title: "All Merges"},
+        {Rel: "target", Target: hyper.Target{Href: "/contacts/1"}, Title: "Ada Lovelace"},
+    },
+}
+```
+
+#### 15.3.4 CLI Interaction
+
+```
+$ cli contacts merges create --sources 2,3 --target 1
+Merge created.
+
+  ID:      1
+  Target:  Ada Lovelace (#1)
+  Sources: Grace Hopper (#2), Charles Babbage (#3)
+
+$ cli contacts merges
+Merges
+┌────┬─────────────────────┬──────────────────┬───────────────────────────────────────────┐
+│ ID │ Created             │ Target           │ Sources                                   │
+├────┼─────────────────────┼──────────────────┼───────────────────────────────────────────┤
+│  1 │ 2025-07-01T14:00:00 │ Ada Lovelace (#1)│ Grace Hopper (#2), Charles Babbage (#3)   │
+└────┴─────────────────────┴──────────────────┴───────────────────────────────────────────┘
+
+Available actions:
+  create    Merge contacts (cli contacts merges create --sources SOURCES --target TARGET)
+
+Navigate to a merge:
+  cli contacts merges show <id>
+
+$ cli contacts merges show 1
+Merge #1
+  ID:         1
+  Created:    2025-07-01T14:00:00Z
+  Target ID:  1
+  Source IDs: [2, 3]
+  Result:
+    Kept Name:    Ada Lovelace
+    Kept Email:   ada@example.com
+    Merged Phone: +1-555-0200 (from Grace Hopper)
+
+Navigate:
+  merges    All Merges (cli contacts merges)
+  target    Ada Lovelace (cli contacts show 1)
+```
+
+Note the absence of `update` or `delete` actions — the CLI shows no mutation commands because the server provides none. The merge is an immutable audit record.
+
+### 15.4 Export as a Resource
+
+An export represents an asynchronous job. Creating an export starts the process; the export resource has state that transitions from `pending` to `complete`. Once complete, the resource gains a `Link` with `rel: "download"` pointing to the generated file.
+
+#### 15.4.1 Exports Collection (Server Side)
+
+```go
+exports := hyper.Representation{
+    Kind: "export-list",
+    Self: &hyper.Target{Href: "/contacts/exports"},
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:     "Export Contacts",
+            Rel:      "create",
+            Method:   "POST",
+            Target:   hyper.Target{Href: "/contacts/exports"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {
+                    Name:     "format",
+                    Type:     "select",
+                    Label:    "Format",
+                    Required: true,
+                    Options: []hyper.Option{
+                        {Value: "csv", Label: "CSV"},
+                        {Value: "vcf", Label: "vCard"},
+                        {Value: "json", Label: "JSON"},
+                    },
+                },
+                {
+                    Name:  "query",
+                    Type:  "text",
+                    Label: "Filter Query",
+                    Help:  "Optional search query to filter exported contacts",
+                },
+            },
+        },
+    },
+    Embedded: map[string][]hyper.Representation{
+        "items": {
+            {
+                Kind: "export",
+                Self: &hyper.Target{Href: "/contacts/exports/1"},
+                State: hyper.Object{
+                    "id":     hyper.Scalar{V: 1},
+                    "format": hyper.Scalar{V: "csv"},
+                    "status": hyper.Scalar{V: "complete"},
+                },
+                Links: []hyper.Link{
+                    {Rel: "self", Target: hyper.Target{Href: "/contacts/exports/1"}, Title: "Export #1"},
+                },
+            },
+        },
+    },
+}
+```
+
+#### 15.4.2 Exports Collection (JSON Wire Format)
+
+```json
+{
+  "kind": "export-list",
+  "self": {"href": "/contacts/exports"},
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "Contacts"}
+  ],
+  "actions": [
+    {
+      "name": "Export Contacts",
+      "rel": "create",
+      "method": "POST",
+      "href": "/contacts/exports",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {
+          "name": "format",
+          "type": "select",
+          "label": "Format",
+          "required": true,
+          "options": [
+            {"value": "csv", "label": "CSV"},
+            {"value": "vcf", "label": "vCard"},
+            {"value": "json", "label": "JSON"}
+          ]
+        },
+        {
+          "name": "query",
+          "type": "text",
+          "label": "Filter Query",
+          "help": "Optional search query to filter exported contacts"
+        }
+      ]
+    }
+  ],
+  "embedded": {
+    "items": [
+      {
+        "kind": "export",
+        "self": {"href": "/contacts/exports/1"},
+        "state": {"id": 1, "format": "csv", "status": "complete"},
+        "links": [
+          {"rel": "self", "href": "/contacts/exports/1", "title": "Export #1"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 15.4.3 Pending Export (Server Side)
+
+When first created, the export is in `pending` state with no download link:
+
+```go
+pendingExport := hyper.Representation{
+    Kind: "export",
+    Self: &hyper.Target{Href: "/contacts/exports/2"},
+    State: hyper.Object{
+        "id":         hyper.Scalar{V: 2},
+        "format":     hyper.Scalar{V: "csv"},
+        "status":     hyper.Scalar{V: "pending"},
+        "created_at": hyper.Scalar{V: "2025-08-10T09:00:00Z"},
+    },
+    Links: []hyper.Link{
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+    },
+}
+```
+
+#### 15.4.4 Complete Export (Server Side)
+
+Once processing finishes, the server adds a `download` `Link`:
+
+```go
+completeExport := hyper.Representation{
+    Kind: "export",
+    Self: &hyper.Target{Href: "/contacts/exports/2"},
+    State: hyper.Object{
+        "id":           hyper.Scalar{V: 2},
+        "format":       hyper.Scalar{V: "csv"},
+        "status":       hyper.Scalar{V: "complete"},
+        "created_at":   hyper.Scalar{V: "2025-08-10T09:00:00Z"},
+        "completed_at": hyper.Scalar{V: "2025-08-10T09:00:04Z"},
+        "record_count": hyper.Scalar{V: 142},
+    },
+    Links: []hyper.Link{
+        {Rel: "exports", Target: hyper.Target{Href: "/contacts/exports"}, Title: "All Exports"},
+        {Rel: "download", Target: hyper.Target{Href: "/contacts/exports/2/file"}, Title: "Download CSV"},
+    },
+}
+```
+
+#### 15.4.5 Complete Export (JSON Wire Format)
+
+```json
+{
+  "kind": "export",
+  "self": {"href": "/contacts/exports/2"},
+  "state": {
+    "id": 2,
+    "format": "csv",
+    "status": "complete",
+    "created_at": "2025-08-10T09:00:00Z",
+    "completed_at": "2025-08-10T09:00:04Z",
+    "record_count": 142
+  },
+  "links": [
+    {"rel": "exports", "href": "/contacts/exports", "title": "All Exports"},
+    {"rel": "download", "href": "/contacts/exports/2/file", "title": "Download CSV"}
+  ]
+}
+```
+
+#### 15.4.6 CLI Interaction
+
+```
+$ cli contacts exports create --format csv
+Export created.
+
+  ID:     2
+  Format: csv
+  Status: pending
+
+$ cli contacts exports show 2
+Export #2
+  ID:      2
+  Format:  csv
+  Status:  pending
+  Created: 2025-08-10T09:00:00Z
+
+Navigate:
+  exports   All Exports (cli contacts exports)
+
+$ cli contacts exports show 2
+Export #2
+  ID:           2
+  Format:       csv
+  Status:       complete
+  Created:      2025-08-10T09:00:00Z
+  Completed:    2025-08-10T09:00:04Z
+  Record Count: 142
+
+Navigate:
+  exports    All Exports (cli contacts exports)
+  download   Download CSV (cli contacts exports download 2)
+```
+
+The `download` `Link` only appears once the export is complete. The CLI's standard link-following renders it as a navigable subcommand — no special-casing needed. When the user follows the `download` link, the CLI fetches the file and writes it to stdout or a local file.
+
+### 15.5 CLI Command Tree
+
+With all three operation-as-resource sub-collections discovered, the full command tree looks like this:
+
+```
+cli
+├── contacts
+│   ├── show <id>
+│   ├── create
+│   ├── archives
+│   │   ├── create
+│   │   ├── show <id>
+│   │   └── delete <id>   (restore/undo)
+│   ├── merges
+│   │   ├── create
+│   │   └── show <id>
+│   └── exports
+│       ├── create
+│       └── show <id>
+└── search
+```
+
+Every command in this tree is discovered through the standard link-following and action-executing logic described in [Section 7](#7-nested-subcommands-and-deep-navigation) and [Section 8](#8-executing-actions). The CLI code requires zero changes to support archives, merges, and exports — the server adds `Links` and the CLI follows them.
+
+### 15.6 Trade-offs
+
+**Advantages:**
+
+- **Fully RESTful.** Every operation follows the same create/read/delete pattern. No custom verbs, no RPC-style endpoints. The API is uniform.
+- **Auditable.** Merges and archives are first-class resources with timestamps and details. Browsing `/contacts/merges` shows a complete history of merge operations without a separate audit log.
+- **Undo-able.** Archive supports undo via `DELETE` — the resource metaphor naturally provides a handle to reverse the operation.
+- **Discoverable via standard hypermedia.** The CLI's existing link-following and action-executing logic handles everything. No new client-side concepts are needed.
+- **Evolvable.** Adding a new operation (e.g., "import") means adding a new `Link` to the contacts list `Representation`. The CLI discovers it automatically.
+
+**Disadvantages:**
+
+- **More resources to manage.** Three new collections, each with their own endpoints, representations, and storage. The API surface area grows.
+- **More round-trips.** "Archive contacts 1 and 2" requires a `POST` to create the archive, then optionally a `GET` to confirm. Direct mutation (`POST /contacts/1/archive`) would be a single request.
+- **Indirect mental model.** "Archive a contact" becomes "create an archive" — the user must think in terms of resource creation rather than direct action. This is natural for developers comfortable with REST but can feel unintuitive for others.
+- **Forced resource metaphor.** Merges and exports feel more like processes or jobs than entities. A merge is a one-time transformation; modelling it as a persistent resource adds storage and complexity that may not be warranted unless audit is a requirement.
+- **Async complexity for exports.** The export resource has state transitions (`pending` to `complete`) that the CLI must handle — polling or re-fetching to check status. The spec does not define conventions for async/job-like resources, so the polling behavior must be invented by the client.
+
+## 16. Spec Feedback
 
 After playing through the full contacts CLI scenario, the following gaps and questions emerge:
 
@@ -1602,3 +2269,9 @@ After playing through the full contacts CLI scenario, the following gaps and que
 - **Default `Consumes` behavior.** The spec does not state what content type a client should assume when `Action.Consumes` is empty. The spec SHOULD clarify: when `Consumes` is absent, clients SHOULD default to `application/vnd.api+json` for actions with fields, and send no body for actions without fields.
 
 - **Content type and codec selection.** The spec should clarify how `Action.Consumes` and `Action.Produces` relate to the codec system (§9). When a client sees `Consumes: ["application/vnd.api+json"]`, it should use the JSON `SubmissionCodec` to encode the request body. The spec should state this relationship explicitly.
+
+- **Multi-select field type.** The "operations as resources" pattern (Section 15) requires `Fields` that accept multiple entity IDs — e.g., selecting which contacts to archive or merge. The current `Field.Type` vocabulary has `select` for single-value selection, but no `multi-select` or equivalent for choosing multiple values from a set. The spec should consider adding a `multi-select` field type, or clarify conventions for accepting comma-separated IDs in a `text` field. Without this, servers must use `text` fields with help text explaining the expected format, which is fragile and not machine-parseable.
+
+- **Async / job-like resource conventions.** The export resource (Section 15.4) has state that transitions from `pending` to `complete`. The spec has no conventions for resources that represent asynchronous operations. Consider recommending: (1) a standard `State` key like `"status"` with well-known values (`pending`, `processing`, `complete`, `failed`); (2) a `Link` with `rel: "monitor"` or a `Hints` key like `"poll-interval"` to guide client polling behavior; (3) a convention that `Links` may appear or disappear as resource state changes (e.g., a `download` link appears only when status is `complete`). Without conventions, every API invents its own async resource patterns.
+
+- **Immutable resources.** The merge resource (Section 15.3) is intentionally immutable — it has no `update` or `delete` `Actions`. The spec does not provide a way for a server to signal that a resource is immutable. A `Hints` key like `"immutable": true` on the `Representation` (not just on `Actions`) would let clients communicate this clearly in their UI — e.g., a CLI could display "(read-only)" next to the resource, and a web UI could suppress edit buttons entirely.
