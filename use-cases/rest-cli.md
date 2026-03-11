@@ -23,9 +23,12 @@ The CLI starts with a single base URL and fetches the root `Representation`:
 $ cli --base http://localhost:8080/
 ```
 
-1. The client sends `GET /` with `Accept: application/json`
-2. The server returns a root `Representation` encoded per the JSON wire format (§13.3)
-3. The client parses top-level `Links` and `Actions` to build a command tree
+1. The client checks for stored credentials for the base URL (see [Section 12.6](#126-credential-storage)) and includes them in the request if present
+2. The client sends `GET /` with `Accept: application/json` (and `Authorization: Bearer <token>` if credentials are stored)
+3. The server returns a root `Representation` encoded per the JSON wire format (§13.3) — the representation's `Links` and `Actions` may vary based on authentication state (see [Section 12](#12-authentication))
+4. The client parses top-level `Links` and `Actions` to build a command tree
+
+> **Note:** The initial root fetch may return a limited representation if the client is not authenticated. An unauthenticated root might expose only a `login` action, while an authenticated root exposes the full set of links and actions. The CLI should always check for stored credentials before the initial request to ensure the richest possible command tree on startup.
 
 ### 2.2 Root Representation (Server Side)
 
@@ -1171,7 +1174,338 @@ Error: could not connect to http://localhost:8080/contacts
   Connection refused. Is the server running?
 ```
 
-## 12. Representations and Types Exercised
+## 12. Authentication
+
+A hypermedia-driven CLI discovers authentication affordances the same way it discovers everything else: through `Links` and `Actions` on the root `Representation`. The server controls what is available based on auth state — an unauthenticated root representation exposes a `login` action, while an authenticated one exposes a `logout` action and additional protected links.
+
+### 12.1 Unauthenticated Root Representation
+
+When the CLI connects without stored credentials, the server returns a root `Representation` with limited affordances:
+
+```go
+root := hyper.Representation{
+    Kind: "root",
+    Self: &hyper.Target{Href: "/"},
+    Links: []hyper.Link{
+        // No "contacts" link — requires auth
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Login",
+            Rel:    "login",
+            Method: "POST",
+            Target: hyper.Target{Href: "/auth/login"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "username", Type: "text", Label: "Username", Required: true},
+                {Name: "password", Type: "password", Label: "Password", Required: true},
+            },
+        },
+    },
+}
+```
+
+The JSON wire format:
+
+```json
+{
+  "kind": "root",
+  "self": {"href": "/"},
+  "links": [],
+  "actions": [
+    {
+      "name": "Login",
+      "rel": "login",
+      "method": "POST",
+      "href": "/auth/login",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {"name": "username", "type": "text", "label": "Username", "required": true},
+        {"name": "password", "type": "password", "label": "Password", "required": true}
+      ]
+    }
+  ]
+}
+```
+
+The CLI builds a minimal command tree from this unauthenticated representation:
+
+```
+cli
+└── login      (from Action rel="login")
+    ├── --username
+    └── --password
+```
+
+The only available command is `login`. Protected resources like `contacts` are not exposed — the server simply omits those `Links` and `Actions` from the representation.
+
+### 12.2 Login Flow
+
+The user authenticates with `cli login --username ada --password secret`:
+
+1. The CLI finds the `login` `Action` on the root `Representation` by matching `Action.Rel == "login"`
+2. `Field.Type: "password"` triggers masked input if the `--password` flag is omitted — the CLI prompts interactively without echoing characters
+3. The CLI submits credentials to the action's `Target.Href` (`/auth/login`) using the method (`POST`) and content type specified in `Action.Consumes` (`application/vnd.api+json`)
+4. The server validates credentials and returns a response `Representation` with a token
+5. The CLI stores the credential locally (e.g., `~/.config/cli/credentials.json`)
+6. The CLI re-fetches the root representation with the stored credential in an `Authorization` header, revealing new links and actions
+
+The server returns a response `Representation` containing the auth token:
+
+```go
+loginResult := hyper.Representation{
+    Kind: "auth-token",
+    State: hyper.Object{
+        "token":      hyper.Scalar{V: "eyJhbGci..."},
+        "expires_at": hyper.Scalar{V: "2026-04-01T00:00:00Z"},
+    },
+    Links: []hyper.Link{
+        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+    },
+}
+```
+
+The JSON wire format:
+
+```json
+{
+  "kind": "auth-token",
+  "state": {
+    "token": "eyJhbGci...",
+    "expires_at": "2026-04-01T00:00:00Z"
+  },
+  "links": [
+    {"rel": "root", "href": "/", "title": "Home"}
+  ]
+}
+```
+
+The CLI stores the token keyed by base URL and follows the `root` link to re-fetch the root representation with the new credential.
+
+### 12.3 Authenticated Root Representation
+
+After login, the CLI re-fetches the root with `Authorization: Bearer eyJhbGci...`. The server now returns a richer `Representation` with protected links and a `logout` action:
+
+```go
+root := hyper.Representation{
+    Kind: "root",
+    Self: &hyper.Target{Href: "/"},
+    State: hyper.Object{
+        "user": hyper.Scalar{V: "ada"},
+    },
+    Links: []hyper.Link{
+        {Rel: "contacts", Target: hyper.Target{Href: "/contacts"}, Title: "Contacts"},
+        {Rel: "profile", Target: hyper.Target{Href: "/profile"}, Title: "My Profile"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Search",
+            Rel:    "search",
+            Method: "GET",
+            Target: hyper.Target{Href: "/search"},
+            Fields: []hyper.Field{
+                {Name: "q", Type: "text", Label: "Query"},
+            },
+        },
+        {
+            Name:   "Logout",
+            Rel:    "logout",
+            Method: "POST",
+            Target: hyper.Target{Href: "/auth/logout"},
+            Hints: map[string]any{
+                "confirm": "Are you sure you want to log out?",
+            },
+        },
+    },
+}
+```
+
+The JSON wire format:
+
+```json
+{
+  "kind": "root",
+  "self": {"href": "/"},
+  "state": {
+    "user": "ada"
+  },
+  "links": [
+    {"rel": "contacts", "href": "/contacts", "title": "Contacts"},
+    {"rel": "profile", "href": "/profile", "title": "My Profile"}
+  ],
+  "actions": [
+    {
+      "name": "Search",
+      "rel": "search",
+      "method": "GET",
+      "href": "/search",
+      "fields": [
+        {"name": "q", "type": "text", "label": "Query"}
+      ]
+    },
+    {
+      "name": "Logout",
+      "rel": "logout",
+      "method": "POST",
+      "href": "/auth/logout",
+      "hints": {
+        "confirm": "Are you sure you want to log out?"
+      }
+    }
+  ]
+}
+```
+
+The updated command tree now includes protected resources:
+
+```
+cli
+├── contacts    (from Link rel="contacts")
+├── profile     (from Link rel="profile")
+├── search      (from Action rel="search")
+└── logout      (from Action rel="logout")
+```
+
+The `login` action is no longer present — the server omits it for authenticated clients. The `logout` action appears with a `confirm` hint (§15.6) that the CLI uses to prompt the user before executing.
+
+### 12.4 Logout Flow
+
+The user logs out with `cli logout`:
+
+1. The CLI finds the `logout` `Action` on the root `Representation` by matching `Action.Rel == "logout"`
+2. `Hints["confirm"]` contains `"Are you sure you want to log out?"` — the CLI displays this message and waits for user confirmation before proceeding
+3. The CLI submits `POST` to the logout target (`/auth/logout`) with the stored credential in the `Authorization` header
+4. On success, the CLI removes the stored credential from `~/.config/cli/credentials.json`
+5. The CLI re-fetches the root representation without credentials, returning to the unauthenticated state
+
+```
+$ cli logout
+Are you sure you want to log out? [y/N] y
+Logged out successfully.
+```
+
+### 12.5 Token Refresh and Expiry
+
+#### 401 Responses
+
+When a stored token expires, the server returns `401 Unauthorized`. The CLI detects this and informs the user. The 401 response body can itself be a `Representation` with a `login` action, guiding the user back to authentication:
+
+```go
+unauthorized := hyper.Representation{
+    Kind: "error",
+    State: hyper.Object{
+        "message": hyper.Scalar{V: "Token expired"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Login",
+            Rel:    "login",
+            Method: "POST",
+            Target: hyper.Target{Href: "/auth/login"},
+            Consumes: []string{"application/vnd.api+json"},
+            Fields: []hyper.Field{
+                {Name: "username", Type: "text", Label: "Username", Required: true},
+                {Name: "password", Type: "password", Label: "Password", Required: true},
+            },
+        },
+    },
+}
+```
+
+The JSON wire format:
+
+```json
+{
+  "kind": "error",
+  "state": {
+    "message": "Token expired"
+  },
+  "actions": [
+    {
+      "name": "Login",
+      "rel": "login",
+      "method": "POST",
+      "href": "/auth/login",
+      "consumes": ["application/vnd.api+json"],
+      "fields": [
+        {"name": "username", "type": "text", "label": "Username", "required": true},
+        {"name": "password", "type": "password", "label": "Password", "required": true}
+      ]
+    }
+  ]
+}
+```
+
+The CLI displays the error and suggests re-login:
+
+```
+$ cli contacts
+Error 401: Token expired
+  Session expired. Run "cli login" to re-authenticate.
+```
+
+#### Token Refresh
+
+If the server provides a `refresh` action on the auth-token representation, the CLI can automatically refresh before expiry:
+
+```go
+loginResult := hyper.Representation{
+    Kind: "auth-token",
+    State: hyper.Object{
+        "token":      hyper.Scalar{V: "eyJhbGci..."},
+        "expires_at": hyper.Scalar{V: "2026-04-01T00:00:00Z"},
+    },
+    Links: []hyper.Link{
+        {Rel: "root", Target: hyper.Target{Href: "/"}, Title: "Home"},
+    },
+    Actions: []hyper.Action{
+        {
+            Name:   "Refresh Token",
+            Rel:    "refresh",
+            Method: "POST",
+            Target: hyper.Target{Href: "/auth/refresh"},
+        },
+    },
+}
+```
+
+When the CLI detects that `expires_at` is approaching, it submits the `refresh` action automatically. The server returns a new auth-token `Representation` with an updated token and expiry. The CLI stores the new token and continues without interrupting the user.
+
+### 12.6 Credential Storage
+
+The CLI manages credentials locally with the following conventions:
+
+- Credentials are stored per base URL in `~/.config/cli/credentials.json`, allowing the user to be authenticated against multiple servers simultaneously
+- `Field.Type: "password"` (§7.3.1) signals the CLI to prompt interactively with masked input when the value is not provided as a flag — this prevents passwords from appearing in shell history
+- The `--token` flag allows passing a bearer token directly for scripting and CI/CD use cases, bypassing the interactive login flow: `cli --token eyJhbGci... contacts`
+- Stored tokens are included in all subsequent requests as `Authorization: Bearer <token>` headers
+
+### 12.7 Interactive Mode Auth
+
+The interactive REPL reflects auth state changes in real time. When the user logs in, the available commands update immediately:
+
+```
+$ cli --base http://localhost:8080/
+Connected to http://localhost:8080/ (not authenticated)
+
+root> help
+Available commands:
+  login     Log in (--username USERNAME --password PASSWORD)
+
+root> login --username ada --password secret
+Logged in as ada.
+
+root> help
+Available commands:
+  contacts    Contacts
+  profile     My Profile
+  search      Search (--q QUERY)
+  logout      Log out
+```
+
+The REPL re-fetches the root representation after login and rebuilds the command tree. The same happens after logout — the command tree collapses back to just `login`. This is the same discovery mechanism described in [Section 2](#2-discovery-flow) and [Section 9](#9-interactive-mode), applied to auth state transitions.
+
+## 13. Representations and Types Exercised
 
 This use case exercises the following `hyper` types:
 
@@ -1188,9 +1522,11 @@ This use case exercises the following `hyper` types:
 | `Value` (`Scalar`, `RichText`) | Primitive fields, bio content, and note body content |
 | JSON `RepresentationCodec` | Primary codec for all CLI communication (§13) |
 | `Action.Hints` | CLI-specific keys: `confirm`, `destructive`, `hidden` (§15.6) |
+| `Action.Consumes` | Drives the submission content type for login (`application/vnd.api+json`) |
+| `Field.Type: "password"` | Masked interactive input — the CLI prompts without echoing characters when this field type is encountered |
 | `Meta` | Could carry pagination info, total counts (gap identified below) |
 
-## 13. Spec Feedback
+## 14. Spec Feedback
 
 After playing through the full contacts CLI scenario, the following gaps and questions emerge:
 
@@ -1211,3 +1547,7 @@ After playing through the full contacts CLI scenario, the following gaps and que
 - **Action ordering.** The spec does not define whether `Actions` ordering is significant. A CLI displaying actions in `--help` would benefit from knowing that the server's ordering is intentional (e.g., primary action first). Consider stating that `Actions` ordering SHOULD be preserved by codecs and MAY be treated as significant by clients.
 
 - **Parent/child link rel conventions.** Nested subcommands reveal the need for conventional `Link.Rel` values for parent/child navigation. This use case uses `"contact"` as a rel to navigate from a notes list back to the parent contact, but there is no standard rel for "go to my parent resource." The spec should consider recommending `up` as a rel value to navigate to a parent resource (analogous to the IANA-registered `up` link relation), and `collection` to indicate "this link goes to the parent collection" (e.g., from a single note back to the notes list). Without conventions, every API invents its own parent navigation rels, making generic CLI clients harder to build.
+
+- **Auth-driven representation variation.** The spec should clarify that servers MAY return different `Links` and `Actions` based on the client's authentication state. This is implicit in the hypermedia model — the server is always free to tailor the representation — but worth stating explicitly. A server that omits the `contacts` link for unauthenticated clients and includes a `login` action is behaving correctly, and clients should expect the set of affordances to change between requests as auth state evolves.
+
+- **Standard hint for auth-required actions.** Should there be a hint key like `"auth-required": true` on actions that will fail without authentication? This would let a CLI pre-check and prompt for login before attempting the action, rather than waiting for a 401 response. Without this, the client must either attempt the action optimistically and handle the 401, or infer auth requirements from the absence of the action in unauthenticated representations. A standard hint key would make this explicit.
