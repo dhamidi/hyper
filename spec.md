@@ -2176,9 +2176,137 @@ func representationToScope(r hyper.Representation) map[string]any {
         }
         scope[slot] = items
     }
+
+    // Surface representation-level hints.
+    if len(r.Hints) > 0 {
+        scope["hints"] = r.Hints
+    }
+
+    // Surface actions as structured data keyed by rel.
+    if len(r.Actions) > 0 {
+        actions := make(map[string]map[string]any, len(r.Actions))
+        for _, a := range r.Actions {
+            actionScope := map[string]any{
+                "name":   a.Name,
+                "rel":    a.Rel,
+                "method": a.Method,
+            }
+            if len(a.Hints) > 0 {
+                actionScope["hints"] = a.Hints
+                // Flatten hx-* hints for direct attribute spreading.
+                hxAttrs := make(map[string]any)
+                for k, v := range a.Hints {
+                    if strings.HasPrefix(k, "hx-") {
+                        hxAttrs[k] = v
+                    }
+                }
+                if len(hxAttrs) > 0 {
+                    actionScope["hxAttrs"] = hxAttrs
+                }
+            }
+            if len(a.Fields) > 0 {
+                actionScope["fields"] = fieldsToScope(a.Fields)
+            }
+            actions[a.Rel] = actionScope
+        }
+        scope["actions"] = actions
+    }
+
+    // Surface links as structured data keyed by rel.
+    if len(r.Links) > 0 {
+        links := make(map[string]map[string]any, len(r.Links))
+        for _, l := range r.Links {
+            links[l.Rel] = map[string]any{
+                "rel":   l.Rel,
+                "title": l.Title,
+            }
+        }
+        scope["links"] = links
+    }
+
     return scope
 }
+
+// fieldsToScope converts action fields into template-friendly maps.
+func fieldsToScope(fields []hyper.Field) []map[string]any {
+    result := make([]map[string]any, len(fields))
+    for i, f := range fields {
+        m := map[string]any{
+            "name":     f.Name,
+            "type":     f.Type,
+            "required": f.Required,
+        }
+        if f.Value != nil {
+            m["value"] = f.Value
+        }
+        if f.Label != "" {
+            m["label"] = f.Label
+        }
+        if f.Error != "" {
+            m["error"] = f.Error
+        }
+        result[i] = m
+    }
+    return result
+}
 ```
+
+The `hxAttrs` map extracts `hx-*` keys from `Action.Hints` so that
+templates can spread them onto elements using `v-bind` (see below). The
+codec is responsible for injecting the resolved URL as `hx-{method}` into
+`hxAttrs` before rendering — `representationToScope` does not resolve
+targets. For example, the htmlc codec would add
+`hxAttrs["hx-delete"] = "/contacts/42"` after resolving `Action.Target`
+through the `Resolver`.
+
+Note that `links` entries do not include `href` — URLs are resolved by the
+codec through `Resolver` and injected into the scope separately. The same
+applies to `actions` entries; the codec adds resolved URLs after calling
+`representationToScope`.
+
+#### Attribute Spreading with `v-bind`
+
+`htmlc` supports spreading a map of attributes onto an element using
+`v-bind` with a map value. When `v-bind` receives a `map[string]any`, each
+key-value pair becomes an HTML attribute on the element:
+
+```vue
+<!-- Spread hx-* attributes from action hints -->
+<button v-bind="actions.delete.hxAttrs">
+  {{ actions.delete.name }}
+</button>
+
+<!-- Produces (after codec resolves target): -->
+<!-- <button hx-delete="/contacts/42" hx-confirm="..." hx-target="closest tr" hx-swap="outerHTML swap:1s">Delete</button> -->
+```
+
+Templates may mix data-driven and hard-coded attributes. For example,
+`hx-target` might be hard-coded (it is layout-specific) while `hx-confirm`
+comes from hints (it is data-specific):
+
+```vue
+<button v-bind="actions.delete.hxAttrs" hx-target="closest tr">
+  Delete
+</button>
+```
+
+Individual `:attr` bindings (e.g., `:href="editHref"`) continue to work as
+before. The map form of `v-bind` is additive — it does not replace
+individually bound attributes.
+
+#### Convention: When to Use Data-Driven Hints vs. Hard-Coded Attributes
+
+Both patterns are valid and may coexist in the same template:
+
+- **Data-driven** (`v-bind="actions.delete.hxAttrs"`): Best when the same
+  representation serves multiple codecs, when a generic codec iterates over
+  hints, or when attributes are determined by the server (e.g., confirmation
+  messages that vary per record).
+- **Hard-coded** (`hx-target="closest tr"`): Best when the attribute is
+  intrinsic to the template layout and will not vary across representations.
+
+App-specific templates MAY hard-code all htmx attributes for clarity.
+Data-driven hints are opt-in per template, not a requirement.
 
 Use the engine in a handler:
 

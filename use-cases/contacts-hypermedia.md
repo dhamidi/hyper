@@ -483,9 +483,41 @@ The spec provides `Renderer.RespondWithMode` (§10.1) for exactly this purpose �
 </template>
 ```
 
-**Observation on htmx hints in templates:** The htmlc templates above hard-code htmx attributes rather than reading them from `Action.Hints`. This is the pragmatic reality of `.vue` templates — they are static HTML with interpolated values, not programmatically-generated attribute sets. The `Hints` map is most useful for the JSON wire format (where machine clients read them) and for generic template helpers that iterate over hints (per §15.3). In practice, htmlc templates for a specific app will know their htmx attributes at authoring time.
+**Hard-coded vs. data-driven htmx attributes:** The htmlc templates above hard-code htmx attributes rather than reading them from `Action.Hints`. This is often the pragmatic choice for app-specific templates — the template author knows the layout and can hard-code attributes for clarity.
 
-This tension between "hints as data" and "templates as static HTML" is a recurring theme in this document. The `Hints` map adds value when: (1) the same representation serves multiple codecs (HTML + JSON), (2) a generic codec iterates over hints, or (3) the client is a machine (CLI, mobile) that reads hints programmatically. For htmlc templates written for a specific app, the hints serve primarily as documentation of intent.
+However, the updated `representationToScope` (§16.5) now surfaces actions and their hints in the template scope. Templates can use `v-bind` with the `hxAttrs` map to spread `hx-*` attributes from action hints onto elements. The codec resolves `Action.Target` through the `Resolver` and injects the result as `hx-{method}` into `hxAttrs`.
+
+Here is the data-driven alternative for `contact-row.vue`:
+
+```vue
+<!-- components/contact-row.vue (data-driven variant) -->
+<template>
+  <tr>
+    <td><input type="checkbox" name="selected_contact_ids" :value="id" /></td>
+    <td>{{ first }}</td>
+    <td>{{ last }}</td>
+    <td>{{ phone }}</td>
+    <td>{{ email }}</td>
+    <td>
+      <a :href="editHref">Edit</a>
+      <a :href="selfHref">View</a>
+      <button v-bind="actions.delete.hxAttrs">
+        {{ actions.delete.name }}
+      </button>
+    </td>
+  </tr>
+</template>
+```
+
+With the delete action's hints resolved by the codec, `v-bind="actions.delete.hxAttrs"` produces:
+
+```html
+<button hx-delete="/contacts/42" hx-confirm="Are you sure you want to delete this contact?" hx-target="closest tr" hx-swap="outerHTML swap:1s">
+  Delete
+</button>
+```
+
+Both patterns — hard-coded and data-driven — are valid and may coexist. Data-driven hints are most valuable when: (1) the same representation serves multiple codecs (HTML + JSON), (2) a generic codec iterates over hints, or (3) attributes vary per record (e.g., confirmation messages). App-specific templates MAY still hard-code htmx attributes for clarity.
 
 ## 5. View Contact
 
@@ -555,6 +587,24 @@ func handleContactDetail(w http.ResponseWriter, r *http.Request) {
     hx-push-url="true"
     hx-target="body">
     Delete Contact
+  </button>
+  <a :href="listHref">Back</a>
+</template>
+```
+
+Data-driven variant using `v-bind` with action hints:
+
+```vue
+<!-- components/contact-detail.vue (data-driven variant) -->
+<template>
+  <h1>{{ first }} {{ last }}</h1>
+  <div>
+    <p>Phone: {{ phone }}</p>
+    <p>Email: {{ email }}</p>
+  </div>
+  <a :href="editHref">Edit</a>
+  <button v-bind="actions.delete.hxAttrs">
+    {{ actions.delete.name }}
   </button>
   <a :href="listHref">Back</a>
 </template>
@@ -1274,9 +1324,9 @@ This section lists gaps, ambiguities, and suggestions discovered while working t
 
 ### 13.6 Action.Hints vs. Template-Authored Attributes
 
-**Observation.** In practice, htmlc templates for a specific app hard-code htmx attributes rather than reading them from `Action.Hints`. The `Hints` map is most valuable when: (1) the same representation serves multiple codecs, (2) a generic codec iterates over hints, or (3) a machine client reads hints programmatically. For app-specific htmlc templates, the hints serve as documentation of intent but are not consumed at render time.
+**Resolved.** The updated `representationToScope` (§16.5) now surfaces actions, links, and hints in the template scope. Each action's `hx-*` hints are extracted into an `hxAttrs` map that templates can spread onto elements using `v-bind="actions.{rel}.hxAttrs"`. The codec resolves `Action.Target` and injects the resolved URL as `hx-{method}` into `hxAttrs` before rendering.
 
-The spec should clarify the expected consumption pattern for `Hints` in template-based codecs. Is the template expected to iterate over `Hints` and emit them as HTML attributes? Or is `Hints` primarily for machine clients and generic codecs, with template authors knowing their attributes at authoring time?
+Both patterns coexist: app-specific templates MAY hard-code htmx attributes for clarity, and MAY use data-driven `v-bind` spreading when attributes vary per record or when the same representation serves multiple codecs. See §4.4 and §5.3 in this document for data-driven template variants alongside the hard-coded originals.
 
 ### 13.7 Pagination Standardization
 
@@ -1319,5 +1369,6 @@ This is acceptable for template-based rendering (the template author knows to wr
 | 4 | Bulk operations / multi-value fields | Medium — missing field type | §13.5 | **Resolved** — `checkbox-group` and `multiselect` types added (§7.3.1) |
 | 5 | Pagination convention | Medium — interoperability | §13.7 | **Resolved** — pagination `Meta` keys and IANA link rels defined (§4.1, §5.3) |
 | 6 | `RouteRef` lacks query parameter support | Medium — common need | §13.11 | **Resolved** — `RouteRef.Query` added (§8.1) |
-| 7 | No `HX-Trigger` response header convention | Low — transport concern | §13.9 | Open |
-| 8 | Form boundary for embedded item fields | Low — template concern | §13.10 | Open |
+| 7 | `Action.Hints` not surfaced to templates | Medium — data-driven hints | §13.6 | **Resolved** — `representationToScope` surfaces actions/hints; `v-bind` spreads `hxAttrs` (§16.5) |
+| 8 | No `HX-Trigger` response header convention | Low — transport concern | §13.9 | Open |
+| 9 | Form boundary for embedded item fields | Low — template concern | §13.10 | Open |
