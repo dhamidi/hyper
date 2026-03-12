@@ -728,6 +728,21 @@ partial responses) by passing `RenderFragment`.
 
 The renderer SHOULD set the `Content-Type` response header accordingly.
 
+### 10.3 Non-Representation Responses
+
+Not every HTTP response in a `hyper` application is a `Representation`.
+Handlers MAY write responses directly to the `http.ResponseWriter` without
+using `Renderer.Respond` for cases including but not limited to:
+
+- trivial fragment responses (e.g., a single validation message string)
+- empty responses (e.g., 204 No Content after a delete)
+- binary or streamed content (e.g., file downloads)
+- redirect responses (3xx status codes)
+
+The `Renderer` is intended for responses that carry a structured
+`Representation`. Handlers that produce non-representational responses are
+expected to use standard `net/http` patterns directly.
+
 ## 11. HTML Codec
 
 ### 11.1 HTML Role
