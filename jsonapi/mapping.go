@@ -1,6 +1,7 @@
 package jsonapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -8,6 +9,36 @@ import (
 
 	"github.com/dhamidi/hyper"
 )
+
+// Submission represents parsed data from a JSON:API request document.
+// It provides structured access to all members of a JSON:API resource,
+// including type, id, attributes, and relationships.
+type Submission struct {
+	// Type is the resource type from data.type.
+	Type string
+	// ID is the resource ID from data.id.
+	ID string
+	// Attributes holds the resource attributes from data.attributes.
+	Attributes map[string]any
+	// Relationships holds parsed relationship data from data.relationships.
+	Relationships map[string]RelationshipData
+	// RelData holds the data for relationship-only documents
+	// (e.g., PATCH /articles/1/relationships/author).
+	// When non-nil, this is a relationship document rather than a resource document.
+	RelData *RelationshipData
+}
+
+// RelationshipData holds the data from a JSON:API relationship.
+type RelationshipData struct {
+	// One holds a single resource identifier (to-one relationship).
+	One *ResourceIdentifier
+	// Many holds multiple resource identifiers (to-many relationship).
+	Many []ResourceIdentifier
+	// IsNull indicates the relationship data is explicitly null (clear to-one).
+	IsNull bool
+	// IsMany indicates this is a to-many relationship.
+	IsMany bool
+}
 
 // PrimaryData holds the primary data of a JSON:API document.
 // It can represent a single resource, an array of resources, or null.
@@ -147,6 +178,41 @@ type Relationship struct {
 type ResourceIdentifier struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Relationship.
+// It parses the data field into ResourceIdentifier or []ResourceIdentifier
+// rather than leaving it as raw map[string]interface{}.
+func (r *Relationship) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Data  json.RawMessage `json:"data"`
+		Links map[string]any  `json:"links,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	r.Links = raw.Links
+
+	if len(raw.Data) == 0 || string(raw.Data) == "null" {
+		r.Data = nil
+		return nil
+	}
+
+	trimmed := bytes.TrimLeft(raw.Data, " \t\n\r")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var ids []ResourceIdentifier
+		if err := json.Unmarshal(raw.Data, &ids); err != nil {
+			return err
+		}
+		r.Data = ids
+	} else {
+		var id ResourceIdentifier
+		if err := json.Unmarshal(raw.Data, &id); err != nil {
+			return err
+		}
+		r.Data = id
+	}
+	return nil
 }
 
 // paginationRels are link relations that belong at the document level per JSON:API spec.
@@ -543,20 +609,127 @@ func MapFieldErrors(status string, fields map[string]string) ErrorDocument {
 }
 
 // MapToSubmission extracts field values from a JSON:API request document.
-// It reads from data.attributes and returns them as a flat key-value map
-// suitable for use with hyper.WithValues. Only singular resources are
-// supported; collection documents return nil.
+// It reads from data.type, data.id, data.attributes, and data.relationships,
+// returning them as a flat key-value map suitable for use with hyper.WithValues.
+//
+// The following conventions are used for the flat map:
+//   - "_type" contains the resource type from data.type
+//   - "id" contains the resource ID from data.id (if present)
+//   - Attributes are merged directly into the map
+//   - To-one relationships are flattened as "{rel}_id" (string)
+//   - To-many relationships are flattened as "{rel}_ids" ([]string)
+//   - "_relationships" contains structured relationship data preserving types
+//
+// For relationship-only documents (to-many arrays), the map contains
+// "_relationship_data" with the array of resource identifiers.
+//
+// For null data documents (clearing to-one relationships), the map
+// contains "_null" set to true.
 func MapToSubmission(doc Document) map[string]any {
+	if doc.Data.IsNull {
+		return map[string]any{"_null": true}
+	}
+	if doc.Data.IsMany {
+		// Relationship-only to-many document
+		result := make(map[string]any)
+		data := make([]map[string]any, len(doc.Data.Many))
+		for i, r := range doc.Data.Many {
+			data[i] = map[string]any{"type": r.Type, "id": r.ID}
+		}
+		result["_relationship_data"] = data
+		return result
+	}
 	res := doc.Data.Resource()
 	if res == nil {
 		return nil
 	}
 	result := make(map[string]any)
+	if res.Type != "" {
+		result["_type"] = res.Type
+	}
 	if res.ID != "" {
 		result["id"] = res.ID
 	}
 	for k, v := range res.Attributes {
 		result[k] = v
 	}
+	// Flatten relationships into convenience keys and structured data
+	if len(res.Relationships) > 0 {
+		rels := make(map[string]any)
+		for name, rel := range res.Relationships {
+			switch d := rel.Data.(type) {
+			case ResourceIdentifier:
+				result[name+"_id"] = d.ID
+				rels[name] = map[string]any{"type": d.Type, "id": d.ID}
+			case []ResourceIdentifier:
+				ids := make([]string, len(d))
+				fullIDs := make([]map[string]any, len(d))
+				for i, rid := range d {
+					ids[i] = rid.ID
+					fullIDs[i] = map[string]any{"type": rid.Type, "id": rid.ID}
+				}
+				result[name+"_ids"] = ids
+				rels[name] = fullIDs
+			}
+		}
+		if len(rels) > 0 {
+			result["_relationships"] = rels
+		}
+	}
 	return result
+}
+
+// MapSubmission extracts a structured Submission from a JSON:API request document.
+// Unlike MapToSubmission which returns a flat map, this returns a typed struct
+// that cleanly separates type, id, attributes, and relationships.
+//
+// For relationship-only documents (top-level resource identifier or array),
+// the returned Submission has RelData set and Type/ID/Attributes empty.
+//
+// Returns nil when the document has no data (empty document, not null data).
+func MapSubmission(doc Document) *Submission {
+	if doc.Data.IsNull {
+		return &Submission{
+			RelData: &RelationshipData{IsNull: true},
+		}
+	}
+	if doc.Data.IsMany {
+		// Relationship-only to-many document
+		rd := RelationshipData{IsMany: true}
+		for _, r := range doc.Data.Many {
+			rd.Many = append(rd.Many, ResourceIdentifier{Type: r.Type, ID: r.ID})
+		}
+		return &Submission{RelData: &rd}
+	}
+	res := doc.Data.Resource()
+	if res == nil {
+		return nil
+	}
+	s := &Submission{
+		Type:       res.Type,
+		ID:         res.ID,
+		Attributes: res.Attributes,
+	}
+	if len(res.Relationships) > 0 {
+		s.Relationships = make(map[string]RelationshipData)
+		for name, rel := range res.Relationships {
+			s.Relationships[name] = parseRelationshipData(rel)
+		}
+	}
+	return s
+}
+
+// parseRelationshipData converts a Relationship's Data into a RelationshipData.
+func parseRelationshipData(rel Relationship) RelationshipData {
+	if rel.Data == nil {
+		return RelationshipData{IsNull: true}
+	}
+	switch d := rel.Data.(type) {
+	case ResourceIdentifier:
+		return RelationshipData{One: &d}
+	case []ResourceIdentifier:
+		return RelationshipData{Many: d, IsMany: true}
+	default:
+		return RelationshipData{}
+	}
 }

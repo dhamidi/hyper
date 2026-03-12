@@ -19,23 +19,37 @@ func (c SubmissionCodec) MediaTypes() []string {
 }
 
 // Decode reads a JSON:API document from r and populates dst.
-// dst must be a *map[string]any; the map is populated with the flattened
-// attributes from the JSON:API data object plus the "id" if present.
+//
+// dst may be one of:
+//   - *map[string]any: populated with the flattened submission from MapToSubmission
+//   - *Submission: populated with the structured submission from MapSubmission
+//
+// For *map[string]any targets, the map uses underscore-prefixed keys for
+// JSON:API structural members (_type, _relationships, _null, _relationship_data)
+// to avoid conflicts with user attributes.
+//
+// For *Submission targets, all members are available as typed fields.
 func (c SubmissionCodec) Decode(_ context.Context, r io.Reader, dst any, _ hyper.DecodeOptions) error {
-	target, ok := dst.(*map[string]any)
-	if !ok {
-		return fmt.Errorf("jsonapi: Decode target must be *map[string]any, got %T", dst)
-	}
-
 	var doc Document
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return fmt.Errorf("jsonapi: %w", err)
 	}
 
-	result := MapToSubmission(doc)
-	if result == nil {
-		result = make(map[string]any)
+	switch target := dst.(type) {
+	case *map[string]any:
+		result := MapToSubmission(doc)
+		if result == nil {
+			result = make(map[string]any)
+		}
+		*target = result
+	case *Submission:
+		result := MapSubmission(doc)
+		if result == nil {
+			result = &Submission{}
+		}
+		*target = *result
+	default:
+		return fmt.Errorf("jsonapi: Decode target must be *map[string]any or *Submission, got %T", dst)
 	}
-	*target = result
 	return nil
 }

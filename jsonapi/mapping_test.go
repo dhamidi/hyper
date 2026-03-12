@@ -231,6 +231,9 @@ func TestMapToSubmission(t *testing.T) {
 
 	result := MapToSubmission(doc)
 
+	if result["_type"] != "contact" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contact")
+	}
 	if result["id"] != "42" {
 		t.Errorf("id = %v, want %q", result["id"], "42")
 	}
@@ -295,6 +298,9 @@ func TestSubmissionCodec_Decode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode error: %v", err)
 	}
+	if result["_type"] != "contact" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contact")
+	}
 	if result["id"] != "42" {
 		t.Errorf("id = %v, want %q", result["id"], "42")
 	}
@@ -311,6 +317,34 @@ func TestSubmissionCodec_DecodeInvalidTarget(t *testing.T) {
 	err := codec.Decode(context.Background(), r, &s, hyper.DecodeOptions{})
 	if err == nil {
 		t.Error("expected error for invalid target type")
+	}
+}
+
+func TestSubmissionCodec_DecodeToSubmission(t *testing.T) {
+	codec := SubmissionCodec{}
+	body := `{"data":{"type":"contact","id":"42","attributes":{"name":"Ada"},"relationships":{"company":{"data":{"type":"companies","id":"10"}}}}}`
+	r := bytes.NewReader([]byte(body))
+
+	var sub Submission
+	err := codec.Decode(context.Background(), r, &sub, hyper.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if sub.Type != "contact" {
+		t.Errorf("Type = %q, want %q", sub.Type, "contact")
+	}
+	if sub.ID != "42" {
+		t.Errorf("ID = %q, want %q", sub.ID, "42")
+	}
+	if sub.Attributes["name"] != "Ada" {
+		t.Errorf("Attributes[name] = %v, want %q", sub.Attributes["name"], "Ada")
+	}
+	rel, ok := sub.Relationships["company"]
+	if !ok {
+		t.Fatal("expected company relationship")
+	}
+	if rel.One == nil || rel.One.Type != "companies" || rel.One.ID != "10" {
+		t.Errorf("company relationship = %+v, want {companies, 10}", rel.One)
 	}
 }
 
@@ -843,6 +877,386 @@ func TestErrorObject_CRUDScenarios(t *testing.T) {
 				t.Errorf("source.pointer = %q, want %q", result.Errors[0].Source.Pointer, tt.err.Source.Pointer)
 			}
 		})
+	}
+}
+
+// --- Submission test cases ---
+
+func TestMapToSubmission_CreateWithTypeAndAttributes(t *testing.T) {
+	body := `{"data":{"type":"contacts","attributes":{"name":"Ada"}}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	if result["_type"] != "contacts" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contacts")
+	}
+	if result["name"] != "Ada" {
+		t.Errorf("name = %v, want %q", result["name"], "Ada")
+	}
+	// No id on create without client-generated ID
+	if _, ok := result["id"]; ok {
+		t.Error("id should not be present for create without client-generated ID")
+	}
+}
+
+func TestMapToSubmission_CreateWithRelationships(t *testing.T) {
+	body := `{
+		"data": {
+			"type": "articles",
+			"attributes": {"title": "Rails is Omakase"},
+			"relationships": {
+				"author": {"data": {"type": "people", "id": "9"}},
+				"tags": {"data": [{"type": "tags", "id": "2"}, {"type": "tags", "id": "3"}]}
+			}
+		}
+	}`
+	var doc Document
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	result := MapToSubmission(doc)
+
+	// Flat convenience keys
+	if result["author_id"] != "9" {
+		t.Errorf("author_id = %v, want %q", result["author_id"], "9")
+	}
+	tagIDs, ok := result["tags_ids"].([]string)
+	if !ok {
+		t.Fatalf("tags_ids type = %T, want []string", result["tags_ids"])
+	}
+	if len(tagIDs) != 2 || tagIDs[0] != "2" || tagIDs[1] != "3" {
+		t.Errorf("tags_ids = %v, want [2 3]", tagIDs)
+	}
+
+	// Structured relationships
+	rels, ok := result["_relationships"].(map[string]any)
+	if !ok {
+		t.Fatalf("_relationships type = %T, want map[string]any", result["_relationships"])
+	}
+	authorRel, ok := rels["author"].(map[string]any)
+	if !ok {
+		t.Fatalf("_relationships.author type = %T", rels["author"])
+	}
+	if authorRel["type"] != "people" || authorRel["id"] != "9" {
+		t.Errorf("author rel = %v, want {people 9}", authorRel)
+	}
+}
+
+func TestMapToSubmission_UpdateWithIDTypeAndAttributes(t *testing.T) {
+	body := `{"data":{"type":"contacts","id":"42","attributes":{"name":"Ada Updated"}}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	if result["_type"] != "contacts" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contacts")
+	}
+	if result["id"] != "42" {
+		t.Errorf("id = %v, want %q", result["id"], "42")
+	}
+	if result["name"] != "Ada Updated" {
+		t.Errorf("name = %v, want %q", result["name"], "Ada Updated")
+	}
+}
+
+func TestMapToSubmission_UpdateWithRelationshipChanges(t *testing.T) {
+	body := `{
+		"data": {
+			"type": "articles",
+			"id": "1",
+			"attributes": {"title": "Updated Title"},
+			"relationships": {
+				"author": {"data": {"type": "people", "id": "12"}}
+			}
+		}
+	}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	if result["_type"] != "articles" {
+		t.Errorf("_type = %v, want %q", result["_type"], "articles")
+	}
+	if result["id"] != "1" {
+		t.Errorf("id = %v, want %q", result["id"], "1")
+	}
+	if result["title"] != "Updated Title" {
+		t.Errorf("title = %v, want %q", result["title"], "Updated Title")
+	}
+	if result["author_id"] != "12" {
+		t.Errorf("author_id = %v, want %q", result["author_id"], "12")
+	}
+}
+
+func TestMapToSubmission_RelationshipOnlyToOne(t *testing.T) {
+	// PATCH /articles/1/relationships/author
+	body := `{"data":{"type":"people","id":"12"}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	// Single resource identifier treated as a resource with type and id
+	if result["_type"] != "people" {
+		t.Errorf("_type = %v, want %q", result["_type"], "people")
+	}
+	if result["id"] != "12" {
+		t.Errorf("id = %v, want %q", result["id"], "12")
+	}
+}
+
+func TestMapToSubmission_RelationshipOnlyToMany(t *testing.T) {
+	// POST /articles/1/relationships/tags
+	body := `{"data":[{"type":"tags","id":"2"},{"type":"tags","id":"3"}]}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	data, ok := result["_relationship_data"].([]map[string]any)
+	if !ok {
+		t.Fatalf("_relationship_data type = %T, want []map[string]any", result["_relationship_data"])
+	}
+	if len(data) != 2 {
+		t.Fatalf("_relationship_data length = %d, want 2", len(data))
+	}
+	if data[0]["type"] != "tags" || data[0]["id"] != "2" {
+		t.Errorf("data[0] = %v, want {tags 2}", data[0])
+	}
+	if data[1]["type"] != "tags" || data[1]["id"] != "3" {
+		t.Errorf("data[1] = %v, want {tags 3}", data[1])
+	}
+}
+
+func TestMapToSubmission_ClearToOneRelationship(t *testing.T) {
+	// PATCH /articles/1/relationships/author with null data
+	body := `{"data":null}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	isNull, ok := result["_null"].(bool)
+	if !ok || !isNull {
+		t.Errorf("_null = %v, want true", result["_null"])
+	}
+}
+
+func TestMapToSubmission_ClearToManyRelationship(t *testing.T) {
+	// PATCH /articles/1/relationships/tags with empty array
+	body := `{"data":[]}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	data, ok := result["_relationship_data"].([]map[string]any)
+	if !ok {
+		t.Fatalf("_relationship_data type = %T, want []map[string]any", result["_relationship_data"])
+	}
+	if len(data) != 0 {
+		t.Errorf("_relationship_data length = %d, want 0", len(data))
+	}
+}
+
+func TestMapToSubmission_ClientGeneratedID(t *testing.T) {
+	body := `{"data":{"type":"contacts","id":"550e8400-e29b-41d4-a716-446655440000","attributes":{"name":"Ada"}}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	if result["_type"] != "contacts" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contacts")
+	}
+	if result["id"] != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Errorf("id = %v, want UUID", result["id"])
+	}
+	if result["name"] != "Ada" {
+		t.Errorf("name = %v, want %q", result["name"], "Ada")
+	}
+}
+
+func TestMapToSubmission_TypeAlwaysExtractable(t *testing.T) {
+	// Even with no attributes, type should be present
+	body := `{"data":{"type":"contacts"}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	result := MapToSubmission(doc)
+	if result["_type"] != "contacts" {
+		t.Errorf("_type = %v, want %q", result["_type"], "contacts")
+	}
+}
+
+// --- MapSubmission (structured) test cases ---
+
+func TestMapSubmission_CreateWithRelationships(t *testing.T) {
+	body := `{
+		"data": {
+			"type": "articles",
+			"attributes": {"title": "Hello"},
+			"relationships": {
+				"author": {"data": {"type": "people", "id": "9"}},
+				"tags": {"data": [{"type": "tags", "id": "2"}, {"type": "tags", "id": "3"}]}
+			}
+		}
+	}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	sub := MapSubmission(doc)
+	if sub == nil {
+		t.Fatal("expected non-nil submission")
+	}
+	if sub.Type != "articles" {
+		t.Errorf("Type = %q, want %q", sub.Type, "articles")
+	}
+	if sub.Attributes["title"] != "Hello" {
+		t.Errorf("Attributes[title] = %v, want %q", sub.Attributes["title"], "Hello")
+	}
+
+	author, ok := sub.Relationships["author"]
+	if !ok {
+		t.Fatal("expected author relationship")
+	}
+	if author.One == nil || author.One.Type != "people" || author.One.ID != "9" {
+		t.Errorf("author = %+v, want {people 9}", author.One)
+	}
+
+	tags, ok := sub.Relationships["tags"]
+	if !ok {
+		t.Fatal("expected tags relationship")
+	}
+	if !tags.IsMany || len(tags.Many) != 2 {
+		t.Fatalf("tags.Many length = %d, want 2", len(tags.Many))
+	}
+	if tags.Many[0].Type != "tags" || tags.Many[0].ID != "2" {
+		t.Errorf("tags[0] = %+v, want {tags 2}", tags.Many[0])
+	}
+}
+
+func TestMapSubmission_RelationshipOnlyToOne(t *testing.T) {
+	body := `{"data":{"type":"people","id":"12"}}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	sub := MapSubmission(doc)
+	if sub == nil {
+		t.Fatal("expected non-nil submission")
+	}
+	// Single resource identifier: type and ID extracted as resource
+	if sub.Type != "people" {
+		t.Errorf("Type = %q, want %q", sub.Type, "people")
+	}
+	if sub.ID != "12" {
+		t.Errorf("ID = %q, want %q", sub.ID, "12")
+	}
+}
+
+func TestMapSubmission_RelationshipOnlyToMany(t *testing.T) {
+	body := `{"data":[{"type":"tags","id":"2"},{"type":"tags","id":"3"}]}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	sub := MapSubmission(doc)
+	if sub == nil {
+		t.Fatal("expected non-nil submission")
+	}
+	if sub.RelData == nil {
+		t.Fatal("expected RelData to be set")
+	}
+	if !sub.RelData.IsMany {
+		t.Error("expected IsMany=true")
+	}
+	if len(sub.RelData.Many) != 2 {
+		t.Fatalf("RelData.Many length = %d, want 2", len(sub.RelData.Many))
+	}
+	if sub.RelData.Many[0].Type != "tags" || sub.RelData.Many[0].ID != "2" {
+		t.Errorf("RelData.Many[0] = %+v, want {tags 2}", sub.RelData.Many[0])
+	}
+}
+
+func TestMapSubmission_ClearToOneRelationship(t *testing.T) {
+	body := `{"data":null}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	sub := MapSubmission(doc)
+	if sub == nil {
+		t.Fatal("expected non-nil submission")
+	}
+	if sub.RelData == nil {
+		t.Fatal("expected RelData to be set")
+	}
+	if !sub.RelData.IsNull {
+		t.Error("expected RelData.IsNull=true")
+	}
+}
+
+func TestMapSubmission_ClearToManyRelationship(t *testing.T) {
+	body := `{"data":[]}`
+	var doc Document
+	json.Unmarshal([]byte(body), &doc)
+
+	sub := MapSubmission(doc)
+	if sub == nil {
+		t.Fatal("expected non-nil submission")
+	}
+	if sub.RelData == nil {
+		t.Fatal("expected RelData to be set")
+	}
+	if !sub.RelData.IsMany {
+		t.Error("expected RelData.IsMany=true")
+	}
+	if len(sub.RelData.Many) != 0 {
+		t.Errorf("RelData.Many length = %d, want 0", len(sub.RelData.Many))
+	}
+}
+
+func TestMapSubmission_NilForEmptyDocument(t *testing.T) {
+	doc := Document{}
+	sub := MapSubmission(doc)
+	if sub != nil {
+		t.Errorf("expected nil for empty document, got %+v", sub)
+	}
+}
+
+func TestRelationship_UnmarshalJSON_ToOne(t *testing.T) {
+	body := `{"data":{"type":"people","id":"9"}}`
+	var rel Relationship
+	if err := json.Unmarshal([]byte(body), &rel); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	rid, ok := rel.Data.(ResourceIdentifier)
+	if !ok {
+		t.Fatalf("Data type = %T, want ResourceIdentifier", rel.Data)
+	}
+	if rid.Type != "people" || rid.ID != "9" {
+		t.Errorf("Data = %+v, want {people 9}", rid)
+	}
+}
+
+func TestRelationship_UnmarshalJSON_ToMany(t *testing.T) {
+	body := `{"data":[{"type":"tags","id":"2"},{"type":"tags","id":"3"}]}`
+	var rel Relationship
+	if err := json.Unmarshal([]byte(body), &rel); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	rids, ok := rel.Data.([]ResourceIdentifier)
+	if !ok {
+		t.Fatalf("Data type = %T, want []ResourceIdentifier", rel.Data)
+	}
+	if len(rids) != 2 {
+		t.Fatalf("Data length = %d, want 2", len(rids))
+	}
+}
+
+func TestRelationship_UnmarshalJSON_Null(t *testing.T) {
+	body := `{"data":null}`
+	var rel Relationship
+	if err := json.Unmarshal([]byte(body), &rel); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if rel.Data != nil {
+		t.Errorf("Data = %v, want nil", rel.Data)
 	}
 }
 
