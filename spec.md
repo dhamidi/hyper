@@ -2376,16 +2376,20 @@ A conforming implementation MAY:
 
 The following questions remain open for later revisions:
 
-1. whether `Hints` should remain a plain map or become typed codec extensions
+1. ~~whether `Hints` should remain a plain map or become typed codec extensions~~
+   Resolved: see §19.1 item 4.
 2. ~~whether `Object` and `Collection` should remain minimal or grow helper APIs~~
    Resolved: `StateFrom` (§6.4) provides a convenience constructor for `Object`.
    `WithValues` and `WithErrors` (§7.4) provide field derivation helpers.
-3. whether JSON support should target a specific hypermedia media type first
+3. ~~whether JSON support should target a specific hypermedia media type first~~
+   Resolved: see §19.1 item 5.
 4. whether additional provider interfaces (e.g. `EmbeddedProvider`,
    `MetaProvider`) should be added to the extensibility surface
-5. whether provider interfaces should accept a `context.Context` parameter
-6. whether `Hints` keys should follow a namespacing convention (e.g.
-   `htmx:target` vs `hx-target`) to avoid collisions across frameworks
+5. ~~whether provider interfaces should accept a `context.Context` parameter~~
+   Resolved: see §19.1 item 6.
+6. ~~whether `Hints` keys should follow a namespacing convention (e.g.
+   `htmx:target` vs `hx-target`) to avoid collisions across frameworks~~
+   Resolved: see §19.1 item 7.
 
 ### 19.1 Resolved
 
@@ -2406,3 +2410,20 @@ The following questions have been resolved:
    (`"pending"`, `"processing"`, `"complete"`, `"failed"`),
    `Meta.poll-interval` for polling guidance, and dynamic `Links` for result
    delivery (e.g., a `download` link appears on completion).
+4. **`Hints` type.** Resolved: `Hints` remains `map[string]any`. The plain map
+   provides maximum flexibility for heterogeneous codec-specific and UI-specific
+   directives. Codecs consume only the keys they recognize and ignore the rest.
+5. **JSON hypermedia media type.** Resolved: JSON:API (https://jsonapi.org/) is
+   the RECOMMENDED interoperability format for machine clients that require a
+   standardized hypermedia JSON dialect. This support SHALL be delivered as a
+   separate codec package, not as part of the core `hyper` module. The native
+   `hyper` JSON wire format (§14.3) remains the default for `hyper`-to-`hyper`
+   communication.
+6. **`context.Context` in provider interfaces.** Resolved: provider interface
+   methods do not accept `context.Context`. Provider methods are pure data
+   transformations that MUST NOT perform I/O. Callers that need context-aware
+   construction should resolve context-dependent data before invoking providers.
+7. **`Hints` key namespacing.** Resolved: no namespace convention. Hint keys
+   SHOULD use the conventions of their target framework (e.g., `hx-target` for
+   htmx). Codecs consume only the keys they recognize and MUST ignore unknown
+   keys, which prevents collisions in practice.
