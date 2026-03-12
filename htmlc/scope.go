@@ -13,8 +13,11 @@ import (
 // Embedded representations become nested scope slices keyed by slot name.
 // Representation-level Hints are surfaced under "hints".
 // Actions are surfaced both as a map keyed by Rel ("actions") and as an
-// ordered slice ("actionList"). Each action scope includes an "hxAttrs"
-// map containing hx-* prefixed hints for attribute spreading via v-bind.
+// ordered slice ("actionList"). Each action scope includes computed
+// properties for component rendering: "hasFields" (bool), "isGet" (bool),
+// and "formMethod" (string — "GET" or "POST"). It also includes an
+// "hxAttrs" map containing hx-* prefixed hints for attribute spreading
+// via v-bind.
 // Links are surfaced as a map keyed by Rel ("links").
 //
 // Target URLs are NOT resolved by this function — the codec is responsible
@@ -51,10 +54,19 @@ func RepresentationToScope(r hyper.Representation) map[string]any {
 		actions := make(map[string]map[string]any, len(r.Actions))
 		actionList := make([]map[string]any, 0, len(r.Actions))
 		for _, a := range r.Actions {
+			hasFields := len(a.Fields) > 0
+			isGet := a.Method == "GET"
+			formMethod := "POST"
+			if isGet {
+				formMethod = "GET"
+			}
 			actionScope := map[string]any{
-				"name":   a.Name,
-				"rel":    a.Rel,
-				"method": a.Method,
+				"name":       a.Name,
+				"rel":        a.Rel,
+				"method":     a.Method,
+				"hasFields":  hasFields,
+				"isGet":      isGet,
+				"formMethod": formMethod,
 			}
 			if len(a.Hints) > 0 {
 				actionScope["hints"] = a.Hints

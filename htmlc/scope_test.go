@@ -236,6 +236,66 @@ func TestRepresentationToScope_ActionWithFields(t *testing.T) {
 	}
 }
 
+func TestRepresentationToScope_ActionComputedProperties(t *testing.T) {
+	rep := hyper.Representation{
+		Kind: "contact",
+		Actions: []hyper.Action{
+			{Name: "Edit", Rel: "edit", Method: "GET"},
+			{
+				Name:   "Delete",
+				Rel:    "delete",
+				Method: "DELETE",
+			},
+			{
+				Name:   "Create",
+				Rel:    "create",
+				Method: "POST",
+				Fields: []hyper.Field{
+					{Name: "name", Type: "text"},
+				},
+			},
+		},
+	}
+	scope := RepresentationToScope(rep)
+	actions := scope["actions"].(map[string]map[string]any)
+
+	// GET action with no fields
+	edit := actions["edit"]
+	if edit["isGet"] != true {
+		t.Error("edit.isGet should be true")
+	}
+	if edit["hasFields"] != false {
+		t.Error("edit.hasFields should be false")
+	}
+	if edit["formMethod"] != "GET" {
+		t.Errorf("edit.formMethod = %v, want %q", edit["formMethod"], "GET")
+	}
+
+	// DELETE action with no fields
+	del := actions["delete"]
+	if del["isGet"] != false {
+		t.Error("delete.isGet should be false")
+	}
+	if del["hasFields"] != false {
+		t.Error("delete.hasFields should be false")
+	}
+	if del["formMethod"] != "POST" {
+		t.Errorf("delete.formMethod = %v, want %q", del["formMethod"], "POST")
+	}
+
+	// POST action with fields
+	create := actions["create"]
+	if create["isGet"] != false {
+		t.Error("create.isGet should be false")
+	}
+	if create["hasFields"] != true {
+		t.Error("create.hasFields should be true")
+	}
+	if create["formMethod"] != "POST" {
+		t.Errorf("create.formMethod = %v, want %q", create["formMethod"], "POST")
+	}
+}
+
 func TestRepresentationToScope_ActionNoHxAttrsWithoutHxHints(t *testing.T) {
 	rep := hyper.Representation{
 		Kind: "contact",
