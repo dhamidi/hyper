@@ -179,6 +179,22 @@ type Representation struct {
   (`hx-trigger`, `hx-swap`, `hx-target`) that apply to the representation's
   root element.
 
+#### Pagination Metadata
+
+For paginated list representations, the following `Meta` keys are
+RECOMMENDED:
+
+| Key            | Type  | Description                              |
+|----------------|-------|------------------------------------------|
+| `total_count`  | `int` | Total number of items across all pages   |
+| `page_size`    | `int` | Number of items per page                 |
+| `page_count`   | `int` | Total number of pages                    |
+| `current_page` | `int` | The current page number (1-based)        |
+
+All pagination `Meta` keys are OPTIONAL. Servers that cannot efficiently
+compute totals (e.g., cursor-based pagination) MAY omit `total_count` and
+`page_count`.
+
 #### Embedded Representations for Item Lists
 
 When state contains a list of independently addressable items (e.g. contacts,
@@ -330,6 +346,22 @@ When a client follows an `"actions"` link, the response SHOULD be a
 `Representation` whose `Actions` array contains the available actions for
 the originating resource. Clients MAY merge these actions with any actions
 already present on the originating representation.
+
+#### Pagination Links
+
+For paginated collections, implementations SHOULD use the following
+IANA-registered link relations (RFC 8288):
+
+| Rel     | Description                              |
+|---------|------------------------------------------|
+| `next`  | Link to the next page in the series      |
+| `prev`  | Link to the previous page in the series  |
+| `first` | Link to the first page in the series     |
+| `last`  | Link to the last page in the series      |
+
+These are standard IANA link relations. Clients MAY use the presence of a
+`next` link to determine whether more pages are available. The absence of
+a `next` link indicates the current page is the last.
 
 ### 7.2 Action
 
