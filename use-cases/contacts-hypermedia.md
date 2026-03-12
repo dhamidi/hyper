@@ -519,6 +519,28 @@ With the delete action's hints resolved by the codec, `v-bind="actions.delete.hx
 
 Both patterns — hard-coded and data-driven — are valid and may coexist. Data-driven hints are most valuable when: (1) the same representation serves multiple codecs (HTML + JSON), (2) a generic codec iterates over hints, or (3) attributes vary per record (e.g., confirmation messages). App-specific templates MAY still hard-code htmx attributes for clarity.
 
+Component-based variant using the `<action>` component (§16.6):
+
+```vue
+<!-- components/contact-row.vue (component-based variant) -->
+<template>
+  <tr>
+    <td><input type="checkbox" name="selected_contact_ids" :value="id" /></td>
+    <td>{{ first }}</td>
+    <td>{{ last }}</td>
+    <td>{{ phone }}</td>
+    <td>{{ email }}</td>
+    <td>
+      <a :href="links.edit.href">Edit</a>
+      <a :href="links.self.href">View</a>
+      <action v-bind="actions.delete" />
+    </td>
+  </tr>
+</template>
+```
+
+The `<action>` component inspects `actions.delete` and renders a `<button>` with the `hx-*` attributes from the action's hints. The template no longer needs to know about `hx-delete`, `hx-confirm`, `hx-target`, or `hx-swap` — the server controls those through `Action.Hints`.
+
 ## 5. View Contact
 
 ### 5.1 Representation
@@ -609,6 +631,24 @@ Data-driven variant using `v-bind` with action hints:
   <a :href="listHref">Back</a>
 </template>
 ```
+
+Component-based variant using the `<action>` component (§16.6):
+
+```vue
+<!-- components/contact-detail.vue (component-based variant) -->
+<template>
+  <h1>{{ first }} {{ last }}</h1>
+  <div>
+    <p>Phone: {{ phone }}</p>
+    <p>Email: {{ email }}</p>
+  </div>
+  <a :href="links.edit.href">Edit</a>
+  <action v-bind="actions.delete" />
+  <a :href="links.list.href">Back</a>
+</template>
+```
+
+The `<action>` component renders the delete action as a `<button>` with all `hx-*` attributes spread automatically. The `destructive` hint adds `class="destructive"` for styling.
 
 ### 5.4 Delete from Detail Page
 
@@ -789,6 +829,29 @@ On success, the server redirects to the detail page (303 See Other). With `hx-bo
   <a :href="listHref">Back</a>
 </template>
 ```
+
+Component-based variant using `<action>` and `<field>` components (§16.6):
+
+```vue
+<!-- components/contact-form.vue (component-based variant) -->
+<template>
+  <action v-bind="actions.create || actions.update">
+    <template #fields>
+      <fieldset>
+        <legend>Contact Values</legend>
+        <field v-for="f in (actions.create || actions.update).fields"
+          :key="f.name" v-bind="f" />
+      </fieldset>
+    </template>
+    <template #submit>Save</template>
+  </action>
+  <a :href="links.list.href">Back</a>
+</template>
+```
+
+The `<action>` component renders a `<form>` because the action has fields. The `#fields` slot provides a custom layout with a `<fieldset>` wrapper, while each `<field>` component renders the appropriate input element based on the field's `type`. Validation errors from `Field.Error` are displayed automatically by the `<field>` component.
+
+Note that the email field's inline validation (`hx-get` with `hx-trigger="change, keyup delay:200ms changed"`) is not captured here — that htmx behavior is template-specific and would require a custom `<field>` override or a manual field in the `#fields` slot. This is a case where the component-based approach trades some app-specific behavior for simplicity.
 
 ## 7. Edit Contact
 
@@ -1271,6 +1334,31 @@ func handleArchiveReset(w http.ResponseWriter, r *http.Request) {
 </template>
 ```
 
+Component-based variant using `<action>` components (§16.6):
+
+```vue
+<!-- components/archive-ui.vue (component-based variant) -->
+<template>
+  <div id="archive-progress" v-bind="hints">
+    <div v-if="status === 'waiting'">
+      <action v-bind="actions['start-archive']" />
+    </div>
+
+    <div v-if="status === 'running'">
+      <progress :value="progress" max="1"></progress>
+      <action v-bind="actions['cancel-archive']" />
+    </div>
+
+    <div v-if="status === 'complete'">
+      <a :href="links.download.href" hx-boost="false">{{ links.download.title }}</a>
+      <action v-bind="actions['clear-archive']" />
+    </div>
+  </div>
+</template>
+```
+
+The `v-bind="hints"` on the container div spreads the representation-level hints (`hx-trigger`, `hx-target`, `hx-swap`) that drive the polling loop during the "running" state. Each `<action>` component renders as a `<button>` with the appropriate `hx-*` attributes from its action's hints. The download link remains manual because it requires `hx-boost="false"` — a template-specific concern.
+
 Key observations:
 
 - **`id="archive-progress"`** — the stable ID ensures smooth CSS transitions as htmx swaps the element. This is carried in `Meta` on the representation. The template uses it as the container ID.
@@ -1355,11 +1443,19 @@ The contact list representation in §4.1 now uses these conventions: `Meta` carr
 
 This is acceptable for template-based rendering (the template author knows to wrap the table in a form), but it is a gap for generic codecs that would need to infer the form boundary.
 
-### 13.11 RouteRef Target with Query Parameters
+### 13.11 Repetitive Action and Form Rendering
+
+**Resolved.** Every template in this document manually constructs buttons, forms, and inputs for each action. The `contact-row.vue` template hand-writes a delete button with htmx attributes. The `contact-form.vue` template builds a `<form>` with individual `<input>` elements for each field. The `archive-ui.vue` template has three conditional blocks each constructing buttons with different htmx attributes.
+
+The spec now defines reusable `<action>`, `<field>`, and `<actions>` components (§16.6) that consume the action and field scope maps produced by `representationToScope`. Templates can use `<action v-bind="actions.delete" />` instead of manually constructing a `<button>` with `hx-delete`, `hx-confirm`, `hx-target`, and `hx-swap`. Form actions with fields render as `<form>` elements with auto-generated `<field>` components, while slots allow custom field layouts when needed.
+
+Component-based template variants are shown alongside the manual originals in §4.4, §5.3, §6.4, and §12.4 of this document.
+
+### 13.12 RouteRef Target with Query Parameters
 
 **Resolved.** The `RouteRef` struct (§8.1) now includes a `Query url.Values` field. When both `Params` (path parameters) and `Query` (query parameters) are present, the resolver first resolves the path using `Params`, then appends `Query` as the URL query string. Pagination links in §4.1 and the load-more action in §10.2 now use `RouteRef.Query` to express `?page=N` without manual URL construction.
 
-### 13.12 Summary of Gaps
+### 13.13 Summary of Gaps
 
 | # | Gap | Severity | Section | Status |
 |---|---|---|---|---|
@@ -1372,3 +1468,4 @@ This is acceptable for template-based rendering (the template author knows to wr
 | 7 | `Action.Hints` not surfaced to templates | Medium — data-driven hints | §13.6 | **Resolved** — `representationToScope` surfaces actions/hints; `v-bind` spreads `hxAttrs` (§16.5) |
 | 8 | No `HX-Trigger` response header convention | Low — transport concern | §13.9 | Open |
 | 9 | Form boundary for embedded item fields | Low — template concern | §13.10 | Open |
+| 10 | Repetitive action/form rendering across templates | Medium — maintainability | §13.11 | **Resolved** — `<action>`, `<field>`, `<actions>` components defined (§16.6) |

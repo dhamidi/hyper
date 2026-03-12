@@ -2183,8 +2183,10 @@ func representationToScope(r hyper.Representation) map[string]any {
     }
 
     // Surface actions as structured data keyed by rel.
+    // Also build an actionList array for enumeration components.
     if len(r.Actions) > 0 {
         actions := make(map[string]map[string]any, len(r.Actions))
+        actionList := make([]map[string]any, 0, len(r.Actions))
         for _, a := range r.Actions {
             actionScope := map[string]any{
                 "name":   a.Name,
@@ -2208,8 +2210,10 @@ func representationToScope(r hyper.Representation) map[string]any {
                 actionScope["fields"] = fieldsToScope(a.Fields)
             }
             actions[a.Rel] = actionScope
+            actionList = append(actionList, actionScope)
         }
         scope["actions"] = actions
+        scope["actionList"] = actionList
     }
 
     // Surface links as structured data keyed by rel.
@@ -2235,6 +2239,7 @@ func fieldsToScope(fields []hyper.Field) []map[string]any {
             "name":     f.Name,
             "type":     f.Type,
             "required": f.Required,
+            "readOnly": f.ReadOnly,
         }
         if f.Value != nil {
             m["value"] = f.Value
@@ -2242,8 +2247,22 @@ func fieldsToScope(fields []hyper.Field) []map[string]any {
         if f.Label != "" {
             m["label"] = f.Label
         }
+        if f.Help != "" {
+            m["help"] = f.Help
+        }
         if f.Error != "" {
             m["error"] = f.Error
+        }
+        if len(f.Options) > 0 {
+            opts := make([]map[string]any, len(f.Options))
+            for j, o := range f.Options {
+                opts[j] = map[string]any{
+                    "value":    o.Value,
+                    "label":    o.Label,
+                    "selected": o.Selected,
+                }
+            }
+            m["options"] = opts
         }
         result[i] = m
     }
@@ -2254,10 +2273,21 @@ func fieldsToScope(fields []hyper.Field) []map[string]any {
 The `hxAttrs` map extracts `hx-*` keys from `Action.Hints` so that
 templates can spread them onto elements using `v-bind` (see below). The
 codec is responsible for injecting the resolved URL as `hx-{method}` into
-`hxAttrs` before rendering — `representationToScope` does not resolve
-targets. For example, the htmlc codec would add
-`hxAttrs["hx-delete"] = "/contacts/42"` after resolving `Action.Target`
+`hxAttrs` and as `href` into the action scope before rendering —
+`representationToScope` does not resolve targets. For example, the htmlc
+codec would add `hxAttrs["hx-delete"] = "/contacts/42"` and
+`actionScope["href"] = "/contacts/42"` after resolving `Action.Target`
 through the `Resolver`.
+
+The `actionList` array contains the same action scope maps as the `actions`
+map, but in their original declaration order. This supports enumeration
+components (see §16.7) that render all available actions without knowing
+their rels in advance.
+
+The `fieldsToScope` helper now includes `readOnly`, `help`, and `options`
+on each field map, giving `<field>` components (§16.7) enough information
+to render any field type — including `select`, `checkbox-group`, and
+`textarea` — without additional processing.
 
 Note that `links` entries do not include `href` — URLs are resolved by the
 codec through `Resolver` and injected into the scope separately. The same
@@ -2318,7 +2348,275 @@ func contactHandler(eng *htmlc.Engine, w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### 16.6 CLI Client Hints
+### 16.6 Reusable Component Abstractions
+
+**How do I avoid repeating boilerplate when rendering actions, forms, and
+fields across multiple templates?**
+
+The `representationToScope` function (§16.5) surfaces actions, links, and
+fields in a structured format. Reusable `htmlc` components can consume
+this structure directly, eliminating the need to manually construct buttons,
+forms, and inputs in every template.
+
+This section defines three components: `<action>` renders a single action
+as the appropriate HTML element, `<field>` renders a single field as the
+appropriate input, and `<actions>` enumerates all non-hidden actions for a
+representation.
+
+#### 16.6.1 The `<action>` Component
+
+The `<action>` component receives an action scope (as produced by
+`representationToScope`) via `v-bind` and renders the appropriate HTML
+element based on the action's method and fields:
+
+| Condition | Rendered Element |
+|---|---|
+| `method == "GET"` and no fields | `<a>` with `href` |
+| `method != "GET"` and no fields | `<button>` with `hx-*` attributes |
+| Has fields | `<form>` with nested `<field>` components |
+
+```vue
+<!-- components/action.vue -->
+<template>
+  <!-- GET actions with no fields: render as link -->
+  <a
+    v-if="!hasFields && isGet"
+    v-bind="hxAttrs"
+    :href="href">
+    <slot>{{ name }}</slot>
+  </a>
+
+  <!-- Non-GET actions with no fields: render as button -->
+  <button
+    v-if="!hasFields && !isGet"
+    v-bind="hxAttrs"
+    :class="{ destructive: hints && hints.destructive }"
+    type="button">
+    <slot>{{ name }}</slot>
+  </button>
+
+  <!-- Actions with fields: render as form -->
+  <form
+    v-if="hasFields"
+    :method="formMethod"
+    :action="href"
+    v-bind="formHxAttrs">
+    <slot name="fields">
+      <field v-for="f in fields" :key="f.name" v-bind="f" />
+    </slot>
+    <button type="submit">
+      <slot name="submit">{{ name }}</slot>
+    </button>
+  </form>
+</template>
+```
+
+**Computed properties:**
+
+- `isGet` — `method === "GET"`
+- `hasFields` — `fields && fields.length > 0`
+- `formMethod` — maps HTTP method to HTML form method: `"GET"` stays
+  `"GET"`, everything else becomes `"POST"` (with `hx-*` carrying the
+  actual method)
+- `hxAttrs` — the `hx-*` attribute map from `Action.Hints`, as extracted
+  by `representationToScope`
+- `formHxAttrs` — for forms, the `hx-*` attributes go on the `<form>`
+  element rather than the submit button
+
+**Hint-driven behavior:**
+
+| Hint Key | Effect |
+|---|---|
+| `hx-*` | Spread as HTML attributes on the element |
+| `destructive` | Adds `class="destructive"` for styling |
+| `confirm` | Translated to `hx-confirm` by the codec |
+| `hidden` | The `<actions>` wrapper skips rendering entirely |
+
+**Slot-based customization:**
+
+- **Default slot** — custom button or link content (overrides `action.name`)
+- **`fields` slot** — custom field layout (overrides auto-generated fields)
+- **`submit` slot** — custom submit button content
+
+Usage:
+
+```vue
+<!-- Simple: render delete action as button with hx-* attributes -->
+<action v-bind="actions.delete" />
+
+<!-- Custom content via default slot -->
+<action v-bind="actions.delete">Remove this contact</action>
+
+<!-- Form action with custom field layout via fields slot -->
+<action v-bind="actions.create || actions.update">
+  <template #fields>
+    <fieldset>
+      <legend>Contact Values</legend>
+      <field v-for="f in (actions.create || actions.update).fields"
+        :key="f.name" v-bind="f" />
+    </fieldset>
+  </template>
+</action>
+```
+
+#### 16.6.2 The `<field>` Component
+
+The `<field>` component renders a single field scope (from
+`fieldsToScope`) as the appropriate HTML input element:
+
+```vue
+<!-- components/field.vue -->
+<template>
+  <!-- text, email, tel, url, number, date, password, hidden -->
+  <p v-if="isInput">
+    <label :for="name">{{ label || name }}</label>
+    <input
+      :id="name"
+      :type="type"
+      :name="name"
+      :value="value"
+      :required="required"
+      :readonly="readOnly" />
+    <span class="error" v-if="error">{{ error }}</span>
+    <span class="help" v-if="help">{{ help }}</span>
+  </p>
+
+  <!-- select -->
+  <p v-if="type === 'select'">
+    <label :for="name">{{ label || name }}</label>
+    <select :id="name" :name="name" :required="required">
+      <option v-for="opt in options" :key="opt.value"
+        :value="opt.value" :selected="opt.selected">
+        {{ opt.label }}
+      </option>
+    </select>
+    <span class="error" v-if="error">{{ error }}</span>
+  </p>
+
+  <!-- checkbox -->
+  <p v-if="type === 'checkbox'">
+    <label>
+      <input type="checkbox" :name="name" :value="value" :checked="value" />
+      {{ label || name }}
+    </label>
+  </p>
+
+  <!-- checkbox-group (bulk operations) -->
+  <div v-if="type === 'checkbox-group'">
+    <label v-for="opt in options" :key="opt.value">
+      <input type="checkbox" :name="name" :value="opt.value"
+        :checked="opt.selected" />
+      {{ opt.label }}
+    </label>
+  </div>
+
+  <!-- textarea -->
+  <p v-if="type === 'textarea'">
+    <label :for="name">{{ label || name }}</label>
+    <textarea :id="name" :name="name" :required="required">{{ value }}</textarea>
+    <span class="error" v-if="error">{{ error }}</span>
+    <span class="help" v-if="help">{{ help }}</span>
+  </p>
+</template>
+```
+
+**Computed properties:**
+
+- `isInput` — true when `type` is one of `text`, `email`, `tel`, `url`,
+  `number`, `date`, `password`, `hidden` (single-line input types)
+
+The `<field>` component relies entirely on the field scope produced by
+`fieldsToScope` (§16.5). Each key in the scope map (`name`, `type`,
+`value`, `required`, `readOnly`, `label`, `help`, `error`, `options`)
+maps directly to a template binding.
+
+#### 16.6.3 The `<actions>` Enumeration Component
+
+The `<actions>` component renders all non-hidden actions for a
+representation. It consumes the `actionList` array from
+`representationToScope`:
+
+```vue
+<!-- components/actions.vue -->
+<template>
+  <div class="actions" v-if="actionList.length > 0">
+    <template v-for="a in actionList" :key="a.rel">
+      <action v-bind="a" v-if="!a.hints || !a.hints.hidden" />
+    </template>
+  </div>
+</template>
+```
+
+Usage:
+
+```vue
+<!-- Render all non-hidden actions for a representation -->
+<actions :action-list="actionList" />
+```
+
+This is especially powerful for:
+
+- **Admin interfaces** that auto-generate UI from the data model
+- **Generic resource browsers** that render any representation
+- **Prototyping** — get a working UI by defining only the representation,
+  before writing custom templates
+
+#### 16.6.4 When to Use Components vs. Custom Templates
+
+The `<action>` and `<field>` components eliminate boilerplate for common
+patterns but are not always the right choice:
+
+| Use Case | Recommendation |
+|---|---|
+| Standard CRUD buttons and forms | Use `<action>` — reduces repetition |
+| Actions with app-specific layout (e.g., inline validation, conditional fields) | Use `<action>` with slots for custom field layout |
+| Highly custom UI (e.g., drag-and-drop, multi-step wizards) | Write custom template markup |
+| Admin/generic views | Use `<actions>` for full enumeration |
+| Prototyping | Use `<actions>` to get working UI quickly |
+
+Components and manual markup may coexist in the same template. For
+example, a template might use `<action>` for a delete button while
+rendering a form manually for finer control:
+
+```vue
+<template>
+  <!-- Custom form with full control -->
+  <form method="POST" :action="href">
+    <!-- custom field layout here -->
+    <button type="submit">Save</button>
+  </form>
+
+  <!-- Component-based delete button -->
+  <action v-bind="actions.delete" />
+</template>
+```
+
+#### 16.6.5 Relationship to htmx
+
+The `<action>` component is htmx-aware but not htmx-dependent. Without
+`hx-*` hints, it renders standard HTML forms and links that work with
+normal browser navigation. With `hx-*` hints, it progressively enhances
+elements with htmx attributes. This aligns with htmx's philosophy of
+progressive enhancement.
+
+The component does not generate `hx-*` attributes itself — it only
+spreads attributes that the server has placed in `Action.Hints`. This
+keeps the component generic and ensures that the server remains the
+authority on interaction behavior.
+
+#### 16.6.6 Built-in vs. Library
+
+The `<action>`, `<field>`, and `<actions>` components MAY be shipped as
+part of `htmlc` (as built-in components available to all templates) or as
+a separate component library that applications opt into. Built-in
+components benefit from tighter integration (e.g., automatic registration),
+while a separate library allows applications to provide custom
+implementations.
+
+A conforming `htmlc` implementation SHOULD provide these components or
+document how applications can register their own equivalents.
+
+### 16.7 CLI Client Hints
 
 **How do I use `Action.Hints` to improve the experience for non-HTML clients
 such as CLI tools?**
