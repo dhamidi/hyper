@@ -87,6 +87,44 @@ type Document struct {
 	Data     PrimaryData    `json:"data"`
 	Included []*Resource    `json:"included,omitempty"`
 	Meta     map[string]any `json:"meta,omitempty"`
+	Links    map[string]any `json:"links,omitempty"`
+	JSONAPI  *JSONAPIInfo   `json:"jsonapi,omitempty"`
+}
+
+// JSONAPIInfo describes the server's JSON:API implementation.
+type JSONAPIInfo struct {
+	Version string   `json:"version,omitempty"`
+	Ext     []string `json:"ext,omitempty"`
+	Profile []string `json:"profile,omitempty"`
+}
+
+// ErrorDocument represents a JSON:API error response.
+// JSON:API mandates that "data" and "errors" MUST NOT coexist;
+// using a separate type enforces this at the type level.
+type ErrorDocument struct {
+	Errors  []ErrorObject  `json:"errors"`
+	Meta    map[string]any `json:"meta,omitempty"`
+	Links   map[string]any `json:"links,omitempty"`
+	JSONAPI *JSONAPIInfo   `json:"jsonapi,omitempty"`
+}
+
+// ErrorObject represents a single error in a JSON:API error document.
+type ErrorObject struct {
+	ID     string         `json:"id,omitempty"`
+	Status string         `json:"status,omitempty"`
+	Code   string         `json:"code,omitempty"`
+	Title  string         `json:"title,omitempty"`
+	Detail string         `json:"detail,omitempty"`
+	Source *ErrorSource   `json:"source,omitempty"`
+	Links  map[string]any `json:"links,omitempty"`
+	Meta   map[string]any `json:"meta,omitempty"`
+}
+
+// ErrorSource identifies the source of an error in the request.
+type ErrorSource struct {
+	Pointer   string `json:"pointer,omitempty"`
+	Parameter string `json:"parameter,omitempty"`
+	Header    string `json:"header,omitempty"`
 }
 
 // Resource represents a JSON:API resource object.
@@ -111,6 +149,14 @@ type ResourceIdentifier struct {
 	ID   string `json:"id"`
 }
 
+// paginationRels are link relations that belong at the document level per JSON:API spec.
+var paginationRels = map[string]bool{
+	"first": true,
+	"last":  true,
+	"prev":  true,
+	"next":  true,
+}
+
 // MapRepresentation converts a hyper.Representation into a JSON:API Document.
 // The resolver is used to resolve Target URLs; if nil, only Targets with
 // direct URLs are resolved.
@@ -118,6 +164,10 @@ type ResourceIdentifier struct {
 // When rep.State is a hyper.Collection, the document uses array primary data.
 // Collection items are taken from embedded representations under a key
 // matching rep.Kind; remaining embedded entries go into the included array.
+//
+// Links are partitioned between document-level and resource-level:
+// pagination rels (first, last, prev, next) go to top-level links;
+// "self" appears at both levels; other rels go to data.links.
 func MapRepresentation(rep hyper.Representation, resolver hyper.Resolver) Document {
 	doc := Document{}
 
@@ -158,6 +208,32 @@ func MapRepresentation(rep hyper.Representation, resolver hyper.Resolver) Docume
 				doc.Included = append(doc.Included, inc)
 			}
 		}
+
+		// Remove pagination rels from resource-level links (they go to doc level)
+		if res != nil {
+			for rel := range paginationRels {
+				delete(res.Links, rel)
+			}
+			if len(res.Links) == 0 {
+				res.Links = nil
+			}
+		}
+	}
+
+	// Document-level links: self + pagination rels
+	docLinks := make(map[string]any)
+	selfURL := resolveTarget(rep.Self, resolver)
+	if selfURL != "" {
+		docLinks["self"] = selfURL
+	}
+	for _, link := range rep.Links {
+		if paginationRels[link.Rel] {
+			href := resolveTarget(&link.Target, resolver)
+			docLinks[link.Rel] = href
+		}
+	}
+	if len(docLinks) > 0 {
+		doc.Links = docLinks
 	}
 
 	// Map top-level meta
@@ -442,6 +518,28 @@ func copyMap(m map[string]any) map[string]any {
 		result[k] = v
 	}
 	return result
+}
+
+// NewErrorDocument creates an ErrorDocument from one or more ErrorObjects.
+func NewErrorDocument(errs ...ErrorObject) ErrorDocument {
+	return ErrorDocument{Errors: errs}
+}
+
+// MapFieldErrors converts a map of field paths to error messages into an
+// ErrorDocument with source pointers. Each key is treated as a JSON pointer
+// relative to /data/attributes (e.g. "name" becomes "/data/attributes/name").
+func MapFieldErrors(status string, fields map[string]string) ErrorDocument {
+	errs := make([]ErrorObject, 0, len(fields))
+	for field, detail := range fields {
+		errs = append(errs, ErrorObject{
+			Status: status,
+			Detail: detail,
+			Source: &ErrorSource{
+				Pointer: "/data/attributes/" + field,
+			},
+		})
+	}
+	return ErrorDocument{Errors: errs}
 }
 
 // MapToSubmission extracts field values from a JSON:API request document.

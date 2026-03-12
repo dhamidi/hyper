@@ -84,15 +84,15 @@ func TestMapRepresentation_WithLinks(t *testing.T) {
 		Kind: "article",
 		Self: targetPtr("/articles/1"),
 		Links: []hyper.Link{
-			{Rel: "next", Target: target("/articles/2")},
+			{Rel: "related", Target: target("/articles/2")},
 		},
 	}
 
 	doc := MapRepresentation(rep, nil)
 	data := doc.Data.Resource()
 
-	if data.Links["next"] != "/articles/2" {
-		t.Errorf("links.next = %v, want %q", data.Links["next"], "/articles/2")
+	if data.Links["related"] != "/articles/2" {
+		t.Errorf("links.related = %v, want %q", data.Links["related"], "/articles/2")
 	}
 }
 
@@ -581,6 +581,268 @@ func TestMapRepresentation_CollectionWithActions(t *testing.T) {
 	}
 	if actions[0]["name"] != "create" {
 		t.Errorf("action name = %v, want %q", actions[0]["name"], "create")
+	}
+}
+
+func TestMapRepresentation_PaginationLinksAtTopLevel(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "articles",
+		Self:  targetPtr("/articles?page[number]=3"),
+		State: hyper.Collection{},
+		Links: []hyper.Link{
+			{Rel: "first", Target: target("/articles?page[number]=1")},
+			{Rel: "last", Target: target("/articles?page[number]=13")},
+			{Rel: "prev", Target: target("/articles?page[number]=2")},
+			{Rel: "next", Target: target("/articles?page[number]=4")},
+		},
+		Embedded: map[string][]hyper.Representation{
+			"articles": {
+				{Kind: "article", Self: targetPtr("/articles/5"), State: hyper.Object{"title": hyper.Scalar{V: "Post"}}},
+			},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if doc.Links == nil {
+		t.Fatal("expected top-level links")
+	}
+	if doc.Links["self"] != "/articles?page[number]=3" {
+		t.Errorf("links.self = %v, want /articles?page[number]=3", doc.Links["self"])
+	}
+	if doc.Links["first"] != "/articles?page[number]=1" {
+		t.Errorf("links.first = %v, want /articles?page[number]=1", doc.Links["first"])
+	}
+	if doc.Links["last"] != "/articles?page[number]=13" {
+		t.Errorf("links.last = %v, want /articles?page[number]=13", doc.Links["last"])
+	}
+	if doc.Links["prev"] != "/articles?page[number]=2" {
+		t.Errorf("links.prev = %v, want /articles?page[number]=2", doc.Links["prev"])
+	}
+	if doc.Links["next"] != "/articles?page[number]=4" {
+		t.Errorf("links.next = %v, want /articles?page[number]=4", doc.Links["next"])
+	}
+}
+
+func TestMapRepresentation_SelfLinkAtBothLevels(t *testing.T) {
+	rep := hyper.Representation{
+		Kind: "article",
+		Self: targetPtr("/articles/1"),
+		State: hyper.Object{
+			"title": hyper.Scalar{V: "Hello"},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	// Document-level self
+	if doc.Links == nil || doc.Links["self"] != "/articles/1" {
+		t.Errorf("doc.links.self = %v, want /articles/1", doc.Links["self"])
+	}
+	// Resource-level self
+	data := doc.Data.Resource()
+	if data.Links == nil || data.Links["self"] != "/articles/1" {
+		t.Errorf("data.links.self = %v, want /articles/1", data.Links["self"])
+	}
+}
+
+func TestMapRepresentation_PaginationLinksRemovedFromResource(t *testing.T) {
+	rep := hyper.Representation{
+		Kind: "article",
+		Self: targetPtr("/articles/1"),
+		Links: []hyper.Link{
+			{Rel: "next", Target: target("/articles/2")},
+			{Rel: "related", Target: target("/other")},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
+
+	// "next" is pagination → should be in doc.Links, NOT in data.Links
+	if doc.Links["next"] != "/articles/2" {
+		t.Errorf("doc.links.next = %v, want /articles/2", doc.Links["next"])
+	}
+	if _, ok := data.Links["next"]; ok {
+		t.Error("pagination rel 'next' should not appear in resource-level links")
+	}
+	// "related" is not pagination → stays on resource
+	if data.Links["related"] != "/other" {
+		t.Errorf("data.links.related = %v, want /other", data.Links["related"])
+	}
+}
+
+func TestErrorDocument_SingleError(t *testing.T) {
+	doc := NewErrorDocument(ErrorObject{
+		Status: "404",
+		Title:  "Not Found",
+		Detail: "The resource does not exist",
+	})
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	json.Unmarshal(out, &raw)
+
+	// Must not have "data"
+	if _, ok := raw["data"]; ok {
+		t.Error("error document must not contain 'data'")
+	}
+
+	var errs []ErrorObject
+	json.Unmarshal(raw["errors"], &errs)
+	if len(errs) != 1 {
+		t.Fatalf("errors length = %d, want 1", len(errs))
+	}
+	if errs[0].Status != "404" {
+		t.Errorf("error.status = %q, want %q", errs[0].Status, "404")
+	}
+	if errs[0].Title != "Not Found" {
+		t.Errorf("error.title = %q, want %q", errs[0].Title, "Not Found")
+	}
+	if errs[0].Detail != "The resource does not exist" {
+		t.Errorf("error.detail = %q, want %q", errs[0].Detail, "The resource does not exist")
+	}
+}
+
+func TestErrorDocument_ValidationErrors(t *testing.T) {
+	doc := MapFieldErrors("422", map[string]string{
+		"name":  "is required",
+		"email": "is invalid",
+	})
+
+	if len(doc.Errors) != 2 {
+		t.Fatalf("errors length = %d, want 2", len(doc.Errors))
+	}
+
+	byPointer := map[string]ErrorObject{}
+	for _, e := range doc.Errors {
+		if e.Source == nil {
+			t.Fatal("expected source on validation error")
+		}
+		byPointer[e.Source.Pointer] = e
+	}
+
+	nameErr, ok := byPointer["/data/attributes/name"]
+	if !ok {
+		t.Fatal("expected error for /data/attributes/name")
+	}
+	if nameErr.Status != "422" {
+		t.Errorf("name error status = %q, want %q", nameErr.Status, "422")
+	}
+	if nameErr.Detail != "is required" {
+		t.Errorf("name error detail = %q, want %q", nameErr.Detail, "is required")
+	}
+
+	emailErr, ok := byPointer["/data/attributes/email"]
+	if !ok {
+		t.Fatal("expected error for /data/attributes/email")
+	}
+	if emailErr.Detail != "is invalid" {
+		t.Errorf("email error detail = %q, want %q", emailErr.Detail, "is invalid")
+	}
+}
+
+func TestErrorDocument_WithMeta(t *testing.T) {
+	doc := ErrorDocument{
+		Errors: []ErrorObject{
+			{Status: "500", Title: "Internal Server Error"},
+		},
+		Meta: map[string]any{
+			"request_id": "abc-123",
+		},
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	json.Unmarshal(out, &raw)
+
+	var meta map[string]any
+	json.Unmarshal(raw["meta"], &meta)
+	if meta["request_id"] != "abc-123" {
+		t.Errorf("meta.request_id = %v, want abc-123", meta["request_id"])
+	}
+}
+
+func TestErrorDocument_NoData(t *testing.T) {
+	doc := NewErrorDocument(ErrorObject{Status: "403", Title: "Forbidden"})
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var raw map[string]any
+	json.Unmarshal(out, &raw)
+
+	if _, ok := raw["data"]; ok {
+		t.Error("error document must not contain 'data' key")
+	}
+	if _, ok := raw["errors"]; !ok {
+		t.Error("error document must contain 'errors' key")
+	}
+}
+
+func TestErrorObject_CRUDScenarios(t *testing.T) {
+	tests := []struct {
+		name string
+		err  ErrorObject
+	}{
+		{
+			name: "403 Forbidden",
+			err:  ErrorObject{Status: "403", Title: "Forbidden", Detail: "This operation is not supported"},
+		},
+		{
+			name: "404 Not Found",
+			err:  ErrorObject{Status: "404", Title: "Not Found", Detail: "Resource does not exist"},
+		},
+		{
+			name: "409 Conflict",
+			err:  ErrorObject{Status: "409", Title: "Conflict", Detail: "Type mismatch"},
+		},
+		{
+			name: "422 with source pointer",
+			err: ErrorObject{
+				Status: "422",
+				Title:  "Unprocessable Entity",
+				Detail: "Name is required",
+				Source: &ErrorSource{Pointer: "/data/attributes/name"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := NewErrorDocument(tt.err)
+			out, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatalf("marshal error: %v", err)
+			}
+			// Round-trip
+			var result ErrorDocument
+			if err := json.Unmarshal(out, &result); err != nil {
+				t.Fatalf("unmarshal error: %v", err)
+			}
+			if len(result.Errors) != 1 {
+				t.Fatalf("errors length = %d, want 1", len(result.Errors))
+			}
+			if result.Errors[0].Status != tt.err.Status {
+				t.Errorf("status = %q, want %q", result.Errors[0].Status, tt.err.Status)
+			}
+			if result.Errors[0].Detail != tt.err.Detail {
+				t.Errorf("detail = %q, want %q", result.Errors[0].Detail, tt.err.Detail)
+			}
+			if tt.err.Source != nil && result.Errors[0].Source.Pointer != tt.err.Source.Pointer {
+				t.Errorf("source.pointer = %q, want %q", result.Errors[0].Source.Pointer, tt.err.Source.Pointer)
+			}
+		})
 	}
 }
 
