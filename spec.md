@@ -363,6 +363,30 @@ These are standard IANA link relations. Clients MAY use the presence of a
 `next` link to determine whether more pages are available. The absence of
 a `next` link indicates the current page is the last.
 
+Pagination links SHOULD be expressed via `RouteRef` with `Query` parameters
+(see §8.1), avoiding manual URL construction:
+
+```go
+hyper.Link{
+    Rel: "next",
+    Target: hyper.Target{
+        Route: &hyper.RouteRef{
+            Name:  "contacts.list",
+            Query: url.Values{"page": {"3"}},
+        },
+    },
+}
+```
+
+Or using the `WithQuery` convenience method on `URL`-based targets:
+
+```go
+hyper.Link{
+    Rel:    "next",
+    Target: hyper.Path("contacts").WithQuery(url.Values{"page": {"3"}}),
+}
+```
+
 ### 7.2 Action
 
 ```go
@@ -625,14 +649,23 @@ type Target struct {
 type RouteRef struct {
     Name   string
     Params map[string]string
+    Query  url.Values
 }
 ```
+
+`Query` MAY contain query parameters to be appended to the resolved URL.
+When both `Params` (path parameters) and `Query` (query parameters) are
+present, the resolver SHALL first resolve the path using `Params`, then
+append `Query` as the URL query string. `Query` is also valid on
+`URL`-based targets; resolvers SHALL append `Query` to the URL when
+non-nil.
 
 ### 8.1.1 Requirements
 
 - Exactly one of `URL` or `Route` SHOULD be set
 - `URL` SHALL represent a directly specified target
 - `Route` SHALL represent an abstract, named route target
+- `Query` MAY be set on either `URL` or `Route` targets to append query parameters
 
 ### 8.1.2 Convenience Constructors
 
@@ -665,6 +698,18 @@ func ParseTarget(rawURL string) (Target, error)
 func MustParseTarget(rawURL string) Target
 ```
 
+A `WithQuery` method SHALL be provided to return a copy of the `Target` with
+the given query parameters set. This works with both `URL`-based and
+`Route`-based targets:
+
+```go
+// WithQuery returns a copy of the Target with the given query parameters.
+//
+//   hyper.Path("contacts").WithQuery(url.Values{"page": {"2"}})
+//   → /contacts?page=2
+func (t Target) WithQuery(q url.Values) Target
+```
+
 A `Ptr` method SHALL be provided to obtain a pointer to a `Target`, for use
 in fields typed `*Target` (e.g. `Representation.Self`):
 
@@ -684,8 +729,10 @@ type Resolver interface {
 
 A resolver SHALL:
 
-1. return `URL` directly when present
-2. resolve `Route` when present
+1. return `URL` directly when present — if `Query` is non-nil, append it as
+   the URL query string
+2. resolve `Route` when present — substitute `Params` into the named route's
+   path template, then append `Query` as the URL query string (if non-nil)
 3. fail when neither form is present
 
 ## 9. Media Type Components
