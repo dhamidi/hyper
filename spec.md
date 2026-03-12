@@ -987,9 +987,9 @@ type Client struct {
     // The Client selects a codec based on Action.Consumes.
     SubmissionCodecs []SubmissionCodec
 
-    // Credentials provides authentication tokens for requests.
-    // When non-nil, the Client calls Credentials.Token before each request
-    // and attaches the result as an Authorization header.
+    // Credentials provides authentication credentials for requests.
+    // When non-nil, the Client calls Credentials.Credential before each request
+    // and attaches the result according to the Credential's Scheme.
     // When nil, requests are sent without authentication.
     Credentials CredentialStore
 
@@ -1000,6 +1000,12 @@ type Client struct {
     // Accept is the Accept header value sent with GET requests.
     // Defaults to "application/vnd.api+json" if empty.
     Accept string
+
+    // OnUnauthorized is called when a request receives a 401 response.
+    // If it returns a non-nil Credential, the Client retries the request
+    // with the new credential (exactly once). If nil, 401 responses are
+    // returned as-is.
+    OnUnauthorized func(ctx context.Context, resp *Response) (*Credential, error)
 }
 ```
 
@@ -1021,19 +1027,64 @@ Callers MAY provide custom implementations for:
 - circuit breaking
 - testing (mock responses)
 
-### 11.3 CredentialStore Interface
+### 11.3 Credential Type and CredentialStore Interface
 
-The `CredentialStore` interface abstracts credential retrieval and persistence. The Client calls `Token` before each request to obtain the current credential. The Client calls `Store` after a successful login action to persist new credentials.
+#### 11.3.1 Credential Type
+
+The `Credential` type represents an authentication credential with its placement strategy.
+
+```go
+// Credential represents an authentication credential with its placement strategy.
+type Credential struct {
+    // Scheme determines how the credential is attached to requests.
+    // Well-known values: "bearer", "apikey-header", "apikey-query".
+    Scheme string
+
+    // Value is the credential value (token, key, etc.).
+    Value string
+
+    // Header is the header name for "apikey-header" scheme.
+    // Defaults to "Authorization" for "bearer".
+    // Example: "X-API-Key" for API key auth.
+    Header string
+
+    // Param is the query parameter name for "apikey-query" scheme.
+    // Example: "api_key".
+    Param string
+}
+```
+
+The Client attaches the credential based on `Scheme`:
+- `"bearer"` → `Authorization: Bearer <Value>` (default when Scheme is empty)
+- `"apikey-header"` → `<Header>: <Value>` (e.g., `X-API-Key: abc123`)
+- `"apikey-query"` → appends `<Param>=<Value>` to the request URL query string
+
+Convenience constructors:
+
+```go
+// BearerToken returns a Credential that attaches as "Authorization: Bearer <token>".
+func BearerToken(token string) Credential
+
+// APIKeyHeader returns a Credential that attaches the key in the named header.
+func APIKeyHeader(header, key string) Credential
+
+// APIKeyQuery returns a Credential that appends the key as a query parameter.
+func APIKeyQuery(param, key string) Credential
+```
+
+#### 11.3.2 CredentialStore Interface
+
+The `CredentialStore` interface abstracts credential retrieval and persistence. The Client calls `Credential` before each request to obtain the current credential. The Client calls `Store` after a successful login action to persist new credentials.
 
 ```go
 // CredentialStore retrieves and persists authentication credentials.
 type CredentialStore interface {
-    // Token returns the current bearer token for the given base URL.
-    // Returns ("", nil) when no credential is stored.
-    Token(ctx context.Context, baseURL *url.URL) (string, error)
+    // Credential returns the current credential for the given base URL.
+    // Returns (Credential{}, nil) when no credential is stored.
+    Credential(ctx context.Context, baseURL *url.URL) (Credential, error)
 
-    // Store persists a bearer token for the given base URL.
-    Store(ctx context.Context, baseURL *url.URL, token string) error
+    // Store persists a credential for the given base URL.
+    Store(ctx context.Context, baseURL *url.URL, cred Credential) error
 
     // Delete removes the stored credential for the given base URL.
     Delete(ctx context.Context, baseURL *url.URL) error
@@ -1043,7 +1094,9 @@ type CredentialStore interface {
 `hyper` SHOULD provide a default file-based implementation:
 
 ```go
-// FileCredentialStore stores credentials in a JSON file on disk.
+// FileCredentialStore stores Credential values in a JSON file on disk.
+// Each entry persists the Scheme, Value, Header, and Param fields so that
+// the credential's placement strategy survives across process restarts.
 // The default path is ~/.config/hyper/credentials.json.
 type FileCredentialStore struct {
     Path string
@@ -1062,12 +1115,13 @@ func (c *Client) Fetch(ctx context.Context, target Target) (*Response, error)
 
 The method:
 1. Resolves `target` to an absolute URL against `c.BaseURL`
-2. Calls `c.Credentials.Token` (if non-nil) and attaches the `Authorization: Bearer <token>` header
+2. Calls `c.Credentials.Credential` (if `c.Credentials` is non-nil) and attaches the credential to the request according to its `Scheme` (see §11.3.1)
 3. Sets the `Accept` header to `c.Accept` (defaulting to `"application/vnd.api+json"`)
 4. Executes the request via `c.Transport.Do`
-5. Selects a `RepresentationCodec` from `c.Codecs` based on the response `Content-Type`
-6. Decodes the response body into a `Representation`
-7. Returns a `*Response` containing the decoded `Representation`, HTTP status code, and response headers
+5. If the response status is 401 and `c.OnUnauthorized` is non-nil, calls `c.OnUnauthorized`. If it returns a non-nil `Credential`, retries the request exactly once with the new credential attached
+6. Selects a `RepresentationCodec` from `c.Codecs` based on the response `Content-Type`
+7. Decodes the response body into a `Representation`
+8. Returns a `*Response` containing the decoded `Representation`, HTTP status code, and response headers
 
 #### 11.4.2 Submit
 
@@ -1083,11 +1137,12 @@ The method:
 3. Otherwise, selects a `SubmissionCodec` from `c.SubmissionCodecs` based on `action.Consumes` (defaulting to `"application/vnd.api+json"` when `Consumes` is empty and `values` is non-empty)
 4. Encodes `values` into the request body using the selected codec
 5. Sets the `Content-Type` header to the selected media type
-6. Calls `c.Credentials.Token` (if non-nil) and attaches the `Authorization` header
+6. Calls `c.Credentials.Credential` (if `c.Credentials` is non-nil) and attaches the credential to the request according to its `Scheme` (see §11.3.1)
 7. Sets the `Accept` header
 8. Executes the request via `c.Transport.Do`
-9. Decodes the response body into a `Representation` (same codec selection as `Fetch`)
-10. Returns a `*Response`
+9. If the response status is 401 and `c.OnUnauthorized` is non-nil, calls `c.OnUnauthorized`. If it returns a non-nil `Credential`, retries the request exactly once with the new credential attached
+10. Decodes the response body into a `Representation` (same codec selection as `Fetch`)
+11. Returns a `*Response`
 
 #### 11.4.3 Follow
 
@@ -1165,10 +1220,13 @@ type ClientOption func(*Client)
 
 func WithTransport(t HTTPDoer) ClientOption
 func WithCredentials(cs CredentialStore) ClientOption
+func WithStaticCredential(cred Credential) ClientOption
 func WithCodec(c RepresentationCodec) ClientOption
 func WithSubmissionCodec(c SubmissionCodec) ClientOption
 func WithAccept(accept string) ClientOption
 ```
+
+`WithStaticCredential` wraps a single `Credential` in a read-only `CredentialStore` that always returns it, providing a convenient shorthand for API key or fixed-token authentication.
 
 ### 11.8 Target Resolution for Client
 
@@ -1247,7 +1305,7 @@ if ok {
 }
 ```
 
-#### Handling Authentication
+#### Handling Authentication (Bearer Token)
 
 ```go
 client, _ := hyper.NewClient("http://localhost:8080",
@@ -1270,11 +1328,66 @@ if needsAuth {
 
     // Extract and store token
     if token, ok := authResp.Representation.State.(hyper.Object)["token"]; ok {
-        client.Credentials.Store(ctx, client.BaseURL, token.(hyper.Scalar).V.(string))
+        cred := hyper.BearerToken(token.(hyper.Scalar).V.(string))
+        client.Credentials.Store(ctx, client.BaseURL, cred)
     }
 
     // Re-fetch root with credentials
     resp, _ = client.Fetch(ctx, hyper.Path())
+}
+```
+
+#### API Key Authentication
+
+```go
+// Static API key in a custom header
+client, _ := hyper.NewClient("https://api.example.com",
+    hyper.WithStaticCredential(
+        hyper.APIKeyHeader("X-API-Key", os.Getenv("API_KEY")),
+    ),
+)
+
+resp, _ := client.Fetch(ctx, hyper.Path("/resources"))
+```
+
+```go
+// API key as a query parameter
+client, _ := hyper.NewClient("https://api.example.com",
+    hyper.WithStaticCredential(
+        hyper.APIKeyQuery("api_key", os.Getenv("API_KEY")),
+    ),
+)
+```
+
+#### OAuth Token Refresh
+
+```go
+store := &hyper.FileCredentialStore{
+    Path: "~/.config/myapp/credentials.json",
+}
+
+client, _ := hyper.NewClient("https://api.example.com",
+    hyper.WithCredentials(store),
+)
+
+client.OnUnauthorized = func(ctx context.Context, resp *hyper.Response) (*hyper.Credential, error) {
+    // Look for a refresh action in the 401 response
+    refreshAction, ok := hyper.FindAction(resp.Representation, "refresh")
+    if !ok {
+        return nil, nil // no refresh available
+    }
+
+    // Submit the refresh action to obtain a new token
+    refreshResp, err := client.Submit(ctx, refreshAction, nil)
+    if err != nil {
+        return nil, err
+    }
+
+    // Extract and persist the new token
+    token := refreshResp.Representation.State.(hyper.Object)["token"].(hyper.Scalar).V.(string)
+    cred := hyper.BearerToken(token)
+    store.Store(ctx, client.BaseURL, cred)
+    return &cred, nil
 }
 ```
 
@@ -1289,6 +1402,12 @@ if needsAuth {
 4. **`Response` wraps `Representation`**: Returning a `Response` rather than just a `Representation` gives callers access to HTTP metadata (status codes, headers) needed for error handling, caching, and content negotiation. The raw `Body` is available for passthrough (e.g., `--json` mode in the CLI).
 
 5. **Navigation helpers are free functions**: `FindLink`, `FindAction`, `FindEmbedded`, and `ActionValues` are pure functions, not methods on `Client`. This keeps them testable without HTTP setup and usable in contexts beyond the client (e.g., server-side representation construction).
+
+6. **`Credential` struct over bare token string**: The previous `Token() string` approach hardcoded the `Authorization: Bearer` pattern. Real-world APIs use diverse authentication strategies — API keys in custom headers, query parameter keys, and various `Authorization` schemes. The `Credential` struct carries both the value and its placement strategy, making these patterns expressible without custom `HTTPDoer` wrappers. `Scheme` is a string rather than an enum for extensibility.
+
+7. **`OnUnauthorized` as a function, not an interface**: OAuth token refresh is the primary use case for automatic retry on 401. A single callback is simpler than a multi-method interface for this single-purpose hook. The one-retry limit prevents infinite loops when credentials are genuinely invalid. Callers who do not need refresh simply leave the field nil.
+
+8. **Cookie auth remains implicit**: The `HTTPDoer` wraps `*http.Client`, which already provides cookie jar support. Servers that authenticate via `Set-Cookie` on login responses get automatic cookie handling on subsequent requests without any `Credential` involvement. This is by design — cookie management is a transport concern, not a credential concern.
 
 ## 12. HTML Codec
 
