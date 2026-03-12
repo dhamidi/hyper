@@ -141,6 +141,14 @@ type RepresentationCodec interface {
 	Encode(context.Context, io.Writer, Representation, EncodeOptions) error
 }
 
+// RepresentationDecoder decodes response bodies into Representations.
+// Codecs that support both encoding and decoding implement both
+// RepresentationCodec and RepresentationDecoder.
+type RepresentationDecoder interface {
+	MediaTypes() []string
+	DecodeRepresentation(context.Context, io.Reader) (Representation, error)
+}
+
 // SubmissionCodec decodes submission bodies.
 type SubmissionCodec interface {
 	MediaTypes() []string

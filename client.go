@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -341,6 +342,8 @@ func (c *Client) selectSubmissionMediaType(consumes []string) string {
 }
 
 // decodeResponse reads the HTTP response and decodes it into a Response.
+// It checks the Content-Type header and uses a matching RepresentationDecoder
+// from Client.Codecs. If no matching decoder is found, it falls back to JSON.
 func (c *Client) decodeResponse(resp *http.Response) (*Response, error) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -358,10 +361,28 @@ func (c *Client) decodeResponse(resp *http.Response) (*Response, error) {
 		return result, nil
 	}
 
-	// Decode the JSON wire format into a Representation
+	// Extract the media type from the Content-Type header.
+	contentType := resp.Header.Get("Content-Type")
+	mediaType := ""
+	if contentType != "" {
+		mt, _, _ := mime.ParseMediaType(contentType)
+		mediaType = mt
+	}
+
+	// Try to find a matching RepresentationDecoder from registered codecs.
+	if decoder := c.findDecoder(mediaType); decoder != nil {
+		rep, err := decoder.DecodeRepresentation(context.Background(), bytes.NewReader(bodyBytes))
+		if err != nil {
+			// Decoder found but failed; return response without representation.
+			return result, nil
+		}
+		result.Representation = rep
+		return result, nil
+	}
+
+	// Fallback: decode as JSON for backward compatibility.
 	var raw map[string]any
 	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
-		// If not valid JSON, return the response without a decoded representation
 		return result, nil
 	}
 
@@ -371,6 +392,26 @@ func (c *Client) decodeResponse(resp *http.Response) (*Response, error) {
 	}
 	result.Representation = rep
 	return result, nil
+}
+
+// findDecoder searches Client.Codecs for a RepresentationDecoder whose
+// MediaTypes include the given media type.
+func (c *Client) findDecoder(mediaType string) RepresentationDecoder {
+	if mediaType == "" {
+		return nil
+	}
+	for _, codec := range c.Codecs {
+		dec, ok := codec.(RepresentationDecoder)
+		if !ok {
+			continue
+		}
+		for _, mt := range dec.MediaTypes() {
+			if mt == mediaType {
+				return dec
+			}
+		}
+	}
+	return nil
 }
 
 // decodeRepresentation decodes a JSON wire format map into a Representation.

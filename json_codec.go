@@ -16,6 +16,14 @@ func JSONCodec() RepresentationCodec { return jsonRepCodec{} }
 
 func (jsonRepCodec) MediaTypes() []string { return []string{"application/json"} }
 
+func (c jsonRepCodec) DecodeRepresentation(_ context.Context, r io.Reader) (Representation, error) {
+	var raw map[string]any
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return Representation{}, fmt.Errorf("json: decode representation: %w", err)
+	}
+	return decodeRepresentation(raw)
+}
+
 func (c jsonRepCodec) Encode(ctx context.Context, w io.Writer, rep Representation, opts EncodeOptions) error {
 	out, err := encodeRepresentation(ctx, rep, opts)
 	if err != nil {

@@ -345,6 +345,113 @@ func TestOnUnauthorized_RetryOn401(t *testing.T) {
 	}
 }
 
+func TestDecodeResponse_UsesContentTypeCodec(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "json-decoded"})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Representation.Kind != "json-decoded" {
+		t.Errorf("Kind = %q, want json-decoded", resp.Representation.Kind)
+	}
+}
+
+func TestDecodeResponse_FallsBackToJSONForUnknownContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-unknown")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "fallback"})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Representation.Kind != "fallback" {
+		t.Errorf("Kind = %q, want fallback", resp.Representation.Kind)
+	}
+}
+
+func TestDecodeResponse_HandlesContentTypeWithParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "with-params"})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Representation.Kind != "with-params" {
+		t.Errorf("Kind = %q, want with-params", resp.Representation.Kind)
+	}
+}
+
+func TestDecodeResponse_NonJSONBodyWithoutDecoder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: hello\n\n"))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No matching decoder and not valid JSON, so Representation should be empty
+	if resp.Representation.Kind != "" {
+		t.Errorf("Kind = %q, want empty", resp.Representation.Kind)
+	}
+}
+
+// mockRepDecoder is a test codec that implements both RepresentationCodec and RepresentationDecoder.
+type mockRepDecoder struct {
+	mediaTypes []string
+	decoded    Representation
+}
+
+func (m *mockRepDecoder) MediaTypes() []string { return m.mediaTypes }
+func (m *mockRepDecoder) Encode(_ context.Context, _ io.Writer, _ Representation, _ EncodeOptions) error {
+	return nil
+}
+func (m *mockRepDecoder) DecodeRepresentation(_ context.Context, r io.Reader) (Representation, error) {
+	// Just return the preconfigured representation.
+	io.ReadAll(r) // drain body
+	return m.decoded, nil
+}
+
+func TestDecodeResponse_CustomDecoderByContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.Write([]byte(`{"not":"standard hyper json"}`))
+	}))
+	defer srv.Close()
+
+	custom := &mockRepDecoder{
+		mediaTypes: []string{"application/vnd.api+json"},
+		decoded:    Representation{Kind: "custom-decoded"},
+	}
+
+	c, _ := NewClient(srv.URL, WithCodec(custom))
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Representation.Kind != "custom-decoded" {
+		t.Errorf("Kind = %q, want custom-decoded", resp.Representation.Kind)
+	}
+}
+
 // mockCredentialStore is a simple in-memory credential store for testing.
 type mockCredentialStore struct {
 	cred Credential

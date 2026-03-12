@@ -873,7 +873,20 @@ type SubmissionCodec interface {
 }
 ```
 
-### 9.3 Rationale
+### 9.3 RepresentationDecoder
+
+A `RepresentationDecoder` decodes response bodies into `Representation` values. Codecs that support both encoding (server-side) and decoding (client-side) implement both `RepresentationCodec` and `RepresentationDecoder`.
+
+```go
+type RepresentationDecoder interface {
+    MediaTypes() []string
+    DecodeRepresentation(context.Context, io.Reader) (Representation, error)
+}
+```
+
+The `Client` uses type assertion to check whether a registered `RepresentationCodec` also implements `RepresentationDecoder`. This follows the asymmetric design principle (§9.4): codecs MAY opt into decoding without it being required.
+
+### 9.4 Rationale
 
 Implementations SHALL separate response encoding from request decoding because
 HTML applications commonly:
@@ -882,9 +895,9 @@ HTML applications commonly:
 - submit with `application/x-www-form-urlencoded`
 - upload with `multipart/form-data`
 
-A single symmetric codec abstraction SHALL NOT be required.
+A single symmetric codec abstraction SHALL NOT be required. The `RepresentationDecoder` interface (§9.3) extends this principle to client-side response decoding, allowing codecs to opt into decoding without requiring it.
 
-### 9.4 Suggested Shared Options
+### 9.5 Suggested Shared Options
 
 Implementations SHOULD provide shared option structs so codecs can receive
 request and rendering context without depending on global state.
@@ -1119,7 +1132,7 @@ The method:
 3. Sets the `Accept` header to `c.Accept` (defaulting to `"application/vnd.api+json"`)
 4. Executes the request via `c.Transport.Do`
 5. If the response status is 401 and `c.OnUnauthorized` is non-nil, calls `c.OnUnauthorized`. If it returns a non-nil `Credential`, retries the request exactly once with the new credential attached
-6. Selects a `RepresentationCodec` from `c.Codecs` based on the response `Content-Type`
+6. Parses the response `Content-Type` header and searches `c.Codecs` for a codec that implements `RepresentationDecoder` (§9.3) with a matching media type. If found, uses that decoder; otherwise falls back to JSON decoding for backward compatibility
 7. Decodes the response body into a `Representation`
 8. Returns a `*Response` containing the decoded `Representation`, HTTP status code, and response headers
 
@@ -1141,7 +1154,7 @@ The method:
 7. Sets the `Accept` header
 8. Executes the request via `c.Transport.Do`
 9. If the response status is 401 and `c.OnUnauthorized` is non-nil, calls `c.OnUnauthorized`. If it returns a non-nil `Credential`, retries the request exactly once with the new credential attached
-10. Decodes the response body into a `Representation` (same codec selection as `Fetch`)
+10. Decodes the response body into a `Representation` (same Content-Type-based codec selection as `Fetch`, see §9.3)
 11. Returns a `*Response`
 
 #### 11.4.3 Follow
