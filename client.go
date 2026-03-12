@@ -1,6 +1,7 @@
 package hyper
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -267,6 +268,73 @@ func (c *Client) Submit(ctx context.Context, action Action, values map[string]an
 	}
 
 	return c.decodeResponse(resp)
+}
+
+// FetchStream sends a GET with Accept: text/event-stream and returns a
+// channel of Response values, one per SSE event. The channel is closed when
+// the stream ends or the context is cancelled.
+func (c *Client) FetchStream(ctx context.Context, target Target) (<-chan *Response, error) {
+	u, err := c.resolveTarget(target)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: resolve target: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+
+	if err := c.attachCredential(ctx, req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.Transport.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: execute request: %w", err)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	mt, _, _ := mime.ParseMediaType(ct)
+	if mt != "text/event-stream" {
+		// Not a stream response — decode as a single response and return.
+		singleResp, err := c.decodeResponse(resp)
+		ch := make(chan *Response, 1)
+		if err == nil {
+			ch <- singleResp
+		}
+		close(ch)
+		return ch, err
+	}
+
+	ch := make(chan *Response)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			rep, err := DecodeEvent(reader)
+			if err != nil {
+				return
+			}
+
+			r := &Response{
+				Representation: rep,
+				StatusCode:     resp.StatusCode,
+				Header:         resp.Header,
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- r:
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // Follow is a convenience for Fetch that takes a Link instead of a Target.

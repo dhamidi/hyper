@@ -149,6 +149,14 @@ type RepresentationDecoder interface {
 	DecodeRepresentation(context.Context, io.Reader) (Representation, error)
 }
 
+// StreamingCodec extends RepresentationCodec with the ability to write
+// a sequence of representations as a stream.
+type StreamingCodec interface {
+	RepresentationCodec
+	EncodeEvent(context.Context, io.Writer, Representation, EncodeOptions) error
+	Flush(io.Writer) error
+}
+
 // SubmissionCodec decodes submission bodies.
 type SubmissionCodec interface {
 	MediaTypes() []string

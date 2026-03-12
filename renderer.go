@@ -50,6 +50,67 @@ func (r Renderer) writeResponse(w http.ResponseWriter, req *http.Request, status
 	})
 }
 
+// RespondStream writes a sequence of Representation values as Server-Sent
+// Events. It requires a StreamingCodec registered for "text/event-stream"
+// and an http.ResponseWriter that implements http.Flusher.
+func (r Renderer) RespondStream(w http.ResponseWriter, req *http.Request, reps <-chan Representation) error {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return fmt.Errorf("ResponseWriter does not implement http.Flusher")
+	}
+
+	var sc StreamingCodec
+	for _, c := range r.Codecs {
+		if s, ok := c.(StreamingCodec); ok {
+			for _, mt := range s.MediaTypes() {
+				if mt == "text/event-stream" {
+					sc = s
+					break
+				}
+			}
+		}
+		if sc != nil {
+			break
+		}
+	}
+	if sc == nil {
+		http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
+		return fmt.Errorf("no StreamingCodec for text/event-stream")
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	opts := EncodeOptions{
+		Request:  req,
+		Resolver: r.Resolver,
+		Mode:     RenderDocument,
+	}
+
+	ctx := req.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case rep, ok := <-reps:
+			if !ok {
+				return nil
+			}
+			if err := sc.EncodeEvent(ctx, w, rep, opts); err != nil {
+				return err
+			}
+			if err := sc.Flush(w); err != nil {
+				return err
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 // findCodec returns the first codec that supports the given media type.
 func (r Renderer) findCodec(mediaType string) RepresentationCodec {
 	for _, c := range r.Codecs {

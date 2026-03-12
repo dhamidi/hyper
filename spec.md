@@ -565,10 +565,12 @@ resubmission.
   "result" concept, the existing `Links` mechanism handles it — a
   `download` link appears when the job completes. This is consistent with
   the hypermedia model.
-- **No WebSocket/SSE requirement.** Polling via re-fetch is the simplest
-  pattern and works across all clients. The convention does not preclude
-  servers from offering WebSocket or SSE alternatives, but the baseline is
-  simple HTTP polling.
+- **Polling as baseline, SSE as opt-in upgrade.** Polling via re-fetch is
+  the simplest pattern and works across all clients. Servers MAY
+  additionally offer `text/event-stream` for actions with
+  `Hints["stream"] = true`. This allows progressive enhancement: clients
+  that understand SSE get real-time updates; others fall back to polling.
+  The convention does not preclude WebSocket alternatives.
 
 #### Design Note
 
@@ -923,6 +925,26 @@ const (
 )
 ```
 
+### 9.6 StreamingCodec (optional extension)
+
+A `StreamingCodec` extends `RepresentationCodec` with the ability to write
+a sequence of representations as a stream.
+
+```go
+// StreamingCodec extends RepresentationCodec with the ability to write
+// a sequence of representations as a stream.
+type StreamingCodec interface {
+    RepresentationCodec
+    EncodeEvent(context.Context, io.Writer, Representation, EncodeOptions) error
+    Flush(io.Writer) error
+}
+```
+
+A `StreamingCodec` SHALL be usable as a regular `RepresentationCodec` (its
+`Encode` method writes a single event and closes the stream). The
+`EncodeEvent` method writes one event without closing, allowing handlers to
+call it repeatedly. `Flush` ensures buffered data reaches the client.
+
 ## 10. Renderer
 
 ### 10.1 Renderer API
@@ -979,6 +1001,66 @@ using `Renderer.Respond` for cases including but not limited to:
 The `Renderer` is intended for responses that carry a structured
 `Representation`. Handlers that produce non-representational responses are
 expected to use standard `net/http` patterns directly.
+
+### 10.4 Streaming Responses (text/event-stream)
+
+A `RepresentationCodec` registered for `text/event-stream` MAY encode a
+sequence of representations as Server-Sent Events (SSE). This is the
+RECOMMENDED mechanism for server-push scenarios within hyper.
+
+#### 10.4.1 Event Format
+
+Each SSE event SHALL carry a single hyper `Representation` encoded in the
+codec's secondary format (typically JSON). The event structure:
+
+- `event:` field — the `Representation.Kind` value (e.g., `event: job-progress`)
+- `data:` field — the JSON-encoded representation (one line, or multi-line with `data:` prefix per line)
+- `id:` field (OPTIONAL) — server-assigned event ID for reconnection (`Last-Event-ID`)
+
+#### 10.4.2 Stream Lifecycle
+
+- The stream SHOULD begin with a representation of `Kind: "stream-open"` (or
+  domain-specific equivalent) that carries `Links` and `Actions` available
+  during the stream.
+- The stream SHOULD end with a terminal representation (`Kind: "stream-close"`
+  or domain-specific) that carries final `Links` (e.g., `rel: "download"` for
+  completed jobs).
+- If the connection drops, clients SHOULD reconnect using `Last-Event-ID` per
+  the SSE spec.
+
+#### 10.4.3 Content Negotiation
+
+When `Accept: text/event-stream` is present and an `EventStreamCodec` is
+registered, the `Renderer` negotiates normally. Handlers that support
+streaming SHOULD check the negotiated media type and produce a stream
+accordingly. Handlers that do not support streaming return a single
+representation as usual.
+
+#### 10.4.4 Relation to Async Actions
+
+Actions with `Hints["async"] = true` MAY additionally include
+`Hints["stream"] = true` to signal that the server supports SSE for this
+action's job. Clients MAY request `Accept: text/event-stream` to receive
+streaming progress instead of polling.
+
+### 10.5 RespondStream API
+
+The `Renderer` SHOULD provide a streaming variant that takes a channel or
+iterator of `Representation` values and writes them as SSE events using an
+`http.Flusher`.
+
+```go
+func (r Renderer) RespondStream(w http.ResponseWriter, req *http.Request, reps <-chan Representation) error
+```
+
+`RespondStream` SHALL:
+
+1. Verify that the `http.ResponseWriter` implements `http.Flusher`
+2. Find a `StreamingCodec` for `text/event-stream` among registered codecs
+3. Set `Content-Type: text/event-stream` and `Cache-Control: no-cache`
+4. For each `Representation` received from the channel, call `EncodeEvent`
+   and `Flush`
+5. Return when the channel is closed or the request context is cancelled
 
 ## 11. Client
 
@@ -1592,6 +1674,19 @@ if err := nav.Follow(ctx, "line-items"); err == nil {
 12. **Errors on Follow/Submit do not update position**: When `Follow` or `Submit` returns a non-nil error, the current position is NOT changed. The navigator stays where it was, and the caller can inspect the error and decide how to proceed.
 
 13. **Free functions remain alongside Navigator**: `FindLink`, `FindAction`, etc. remain as free functions. The Navigator's convenience methods (`HasLink`, `FindLink`) delegate to them. This keeps the free functions testable independently and useful outside the Navigator context.
+
+### 11.12 Streaming Fetch
+
+```go
+// FetchStream sends a GET with Accept: text/event-stream and returns
+// a channel of Response values, one per SSE event.
+func (c *Client) FetchStream(ctx context.Context, target Target) (<-chan *Response, error)
+```
+
+The client SHOULD decode each `data:` payload using the registered JSON codec
+and yield a `Response` with the `event:` field mapped to
+`Representation.Kind`. The returned channel is closed when the stream ends or
+the context is cancelled.
 
 ## 12. HTML Codec
 
