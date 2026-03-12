@@ -38,21 +38,22 @@ func TestMapRepresentation_BasicResource(t *testing.T) {
 	}
 
 	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
 
-	if doc.Data == nil {
+	if data == nil {
 		t.Fatal("expected data to be non-nil")
 	}
-	if doc.Data.Type != "contact" {
-		t.Errorf("type = %q, want %q", doc.Data.Type, "contact")
+	if data.Type != "contact" {
+		t.Errorf("type = %q, want %q", data.Type, "contact")
 	}
-	if doc.Data.ID != "42" {
-		t.Errorf("id = %q, want %q", doc.Data.ID, "42")
+	if data.ID != "42" {
+		t.Errorf("id = %q, want %q", data.ID, "42")
 	}
-	if doc.Data.Attributes["name"] != "Ada Lovelace" {
-		t.Errorf("attributes.name = %v, want %q", doc.Data.Attributes["name"], "Ada Lovelace")
+	if data.Attributes["name"] != "Ada Lovelace" {
+		t.Errorf("attributes.name = %v, want %q", data.Attributes["name"], "Ada Lovelace")
 	}
-	if doc.Data.Links["self"] != "/contacts/42" {
-		t.Errorf("links.self = %v, want %q", doc.Data.Links["self"], "/contacts/42")
+	if data.Links["self"] != "/contacts/42" {
+		t.Errorf("links.self = %v, want %q", data.Links["self"], "/contacts/42")
 	}
 }
 
@@ -67,12 +68,13 @@ func TestMapRepresentation_IDFromState(t *testing.T) {
 	}
 
 	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
 
-	if doc.Data.ID != "custom-id" {
-		t.Errorf("id = %q, want %q", doc.Data.ID, "custom-id")
+	if data.ID != "custom-id" {
+		t.Errorf("id = %q, want %q", data.ID, "custom-id")
 	}
 	// "id" should be removed from attributes
-	if _, ok := doc.Data.Attributes["id"]; ok {
+	if _, ok := data.Attributes["id"]; ok {
 		t.Error("id should not appear in attributes")
 	}
 }
@@ -87,9 +89,10 @@ func TestMapRepresentation_WithLinks(t *testing.T) {
 	}
 
 	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
 
-	if doc.Data.Links["next"] != "/articles/2" {
-		t.Errorf("links.next = %v, want %q", doc.Data.Links["next"], "/articles/2")
+	if data.Links["next"] != "/articles/2" {
+		t.Errorf("links.next = %v, want %q", data.Links["next"], "/articles/2")
 	}
 }
 
@@ -117,12 +120,13 @@ func TestMapRepresentation_WithEmbedded(t *testing.T) {
 	}
 
 	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
 
 	// "author" link should become a relationship, not a plain link
-	if _, ok := doc.Data.Links["author"]; ok {
+	if _, ok := data.Links["author"]; ok {
 		t.Error("author should be a relationship, not a plain link")
 	}
-	rel, ok := doc.Data.Relationships["author"]
+	rel, ok := data.Relationships["author"]
 	if !ok {
 		t.Fatal("expected author relationship")
 	}
@@ -200,28 +204,29 @@ func TestMapRepresentation_EmptyRepresentation(t *testing.T) {
 	rep := hyper.Representation{Kind: "empty"}
 
 	doc := MapRepresentation(rep, nil)
+	data := doc.Data.Resource()
 
-	if doc.Data == nil {
+	if data == nil {
 		t.Fatal("expected data to be non-nil")
 	}
-	if doc.Data.Type != "empty" {
-		t.Errorf("type = %q, want %q", doc.Data.Type, "empty")
+	if data.Type != "empty" {
+		t.Errorf("type = %q, want %q", data.Type, "empty")
 	}
-	if doc.Data.ID != "" {
-		t.Errorf("id = %q, want empty", doc.Data.ID)
+	if data.ID != "" {
+		t.Errorf("id = %q, want empty", data.ID)
 	}
 }
 
 func TestMapToSubmission(t *testing.T) {
 	doc := Document{
-		Data: &Resource{
+		Data: PrimaryData{One: &Resource{
 			Type: "contact",
 			ID:   "42",
 			Attributes: map[string]any{
 				"name":  "Ada",
 				"email": "ada@example.com",
 			},
-		},
+		}},
 	}
 
 	result := MapToSubmission(doc)
@@ -270,8 +275,8 @@ func TestRepresentationCodec_Encode(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
-	if doc.Data.Type != "contact" {
-		t.Errorf("type = %q, want %q", doc.Data.Type, "contact")
+	if doc.Data.Resource().Type != "contact" {
+		t.Errorf("type = %q, want %q", doc.Data.Resource().Type, "contact")
 	}
 }
 
@@ -323,7 +328,7 @@ func TestMapRepresentation_MultipleEmbedded(t *testing.T) {
 
 	doc := MapRepresentation(rep, nil)
 
-	rel, ok := doc.Data.Relationships["tags"]
+	rel, ok := doc.Data.Resource().Relationships["tags"]
 	if !ok {
 		t.Fatal("expected tags relationship")
 	}
@@ -339,6 +344,246 @@ func TestMapRepresentation_MultipleEmbedded(t *testing.T) {
 	}
 }
 
+func TestMapRepresentation_CollectionMultipleItems(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "contacts",
+		Self:  targetPtr("/contacts"),
+		State: hyper.Collection{},
+		Embedded: map[string][]hyper.Representation{
+			"contacts": {
+				{
+					Kind:  "contact",
+					Self:  targetPtr("/contacts/1"),
+					State: hyper.Object{"name": hyper.Scalar{V: "Ada"}},
+				},
+				{
+					Kind:  "contact",
+					Self:  targetPtr("/contacts/2"),
+					State: hyper.Object{"name": hyper.Scalar{V: "Grace"}},
+				},
+			},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if !doc.Data.IsMany {
+		t.Fatal("expected collection (IsMany=true)")
+	}
+	if len(doc.Data.Many) != 2 {
+		t.Fatalf("data length = %d, want 2", len(doc.Data.Many))
+	}
+	if doc.Data.Many[0].Type != "contact" {
+		t.Errorf("data[0].type = %q, want %q", doc.Data.Many[0].Type, "contact")
+	}
+	if doc.Data.Many[0].Attributes["name"] != "Ada" {
+		t.Errorf("data[0].attributes.name = %v, want %q", doc.Data.Many[0].Attributes["name"], "Ada")
+	}
+	if doc.Data.Many[1].Attributes["name"] != "Grace" {
+		t.Errorf("data[1].attributes.name = %v, want %q", doc.Data.Many[1].Attributes["name"], "Grace")
+	}
+}
+
+func TestMapRepresentation_EmptyCollection(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "contacts",
+		Self:  targetPtr("/contacts"),
+		State: hyper.Collection{},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if !doc.Data.IsMany {
+		t.Fatal("expected collection (IsMany=true)")
+	}
+	if len(doc.Data.Many) != 0 {
+		t.Fatalf("data length = %d, want 0", len(doc.Data.Many))
+	}
+
+	// Verify JSON output is an empty array
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	json.Unmarshal(out, &raw)
+	if string(raw["data"]) != "[]" {
+		t.Errorf("JSON data = %s, want []", raw["data"])
+	}
+}
+
+func TestMapRepresentation_SingleItemCollection(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "contacts",
+		Self:  targetPtr("/contacts"),
+		State: hyper.Collection{},
+		Embedded: map[string][]hyper.Representation{
+			"contacts": {
+				{
+					Kind:  "contact",
+					Self:  targetPtr("/contacts/1"),
+					State: hyper.Object{"name": hyper.Scalar{V: "Ada"}},
+				},
+			},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if !doc.Data.IsMany {
+		t.Fatal("expected collection (IsMany=true) even for single item")
+	}
+	if len(doc.Data.Many) != 1 {
+		t.Fatalf("data length = %d, want 1", len(doc.Data.Many))
+	}
+	if doc.Data.Many[0].Type != "contact" {
+		t.Errorf("data[0].type = %q, want %q", doc.Data.Many[0].Type, "contact")
+	}
+
+	// Verify JSON output is an array, not an object
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	json.Unmarshal(out, &raw)
+	if raw["data"][0] != '[' {
+		t.Errorf("JSON data should be array, got: %s", raw["data"])
+	}
+}
+
+func TestMapNullDocument(t *testing.T) {
+	doc := MapNullDocument()
+
+	if !doc.Data.IsNull {
+		t.Fatal("expected IsNull=true")
+	}
+	if doc.Data.Resource() != nil {
+		t.Error("Resource() should return nil for null data")
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	json.Unmarshal(out, &raw)
+	if string(raw["data"]) != "null" {
+		t.Errorf("JSON data = %s, want null", raw["data"])
+	}
+}
+
+func TestPrimaryData_UnmarshalNull(t *testing.T) {
+	input := `{"data":null}`
+	var doc Document
+	if err := json.Unmarshal([]byte(input), &doc); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if !doc.Data.IsNull {
+		t.Error("expected IsNull=true after unmarshaling null data")
+	}
+}
+
+func TestPrimaryData_UnmarshalArray(t *testing.T) {
+	input := `{"data":[{"type":"contact","id":"1","attributes":{"name":"Ada"}},{"type":"contact","id":"2","attributes":{"name":"Grace"}}]}`
+	var doc Document
+	if err := json.Unmarshal([]byte(input), &doc); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if !doc.Data.IsMany {
+		t.Fatal("expected IsMany=true after unmarshaling array data")
+	}
+	if len(doc.Data.Many) != 2 {
+		t.Fatalf("data length = %d, want 2", len(doc.Data.Many))
+	}
+	if doc.Data.Many[0].ID != "1" {
+		t.Errorf("data[0].id = %q, want %q", doc.Data.Many[0].ID, "1")
+	}
+}
+
+func TestMapRepresentation_CollectionWithIncluded(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "contacts",
+		Self:  targetPtr("/contacts"),
+		State: hyper.Collection{},
+		Embedded: map[string][]hyper.Representation{
+			"contacts": {
+				{
+					Kind:  "contact",
+					Self:  targetPtr("/contacts/1"),
+					State: hyper.Object{"name": hyper.Scalar{V: "Ada"}},
+					Embedded: map[string][]hyper.Representation{
+						"company": {
+							{Kind: "company", Self: targetPtr("/companies/10"), State: hyper.Object{"name": hyper.Scalar{V: "Acme"}}},
+						},
+					},
+				},
+			},
+			"sponsors": {
+				{Kind: "sponsor", Self: targetPtr("/sponsors/5"), State: hyper.Object{"name": hyper.Scalar{V: "BigCo"}}},
+			},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if !doc.Data.IsMany {
+		t.Fatal("expected collection")
+	}
+	if len(doc.Data.Many) != 1 {
+		t.Fatalf("data length = %d, want 1", len(doc.Data.Many))
+	}
+	// Included should have the company sub-resource and the sponsors entry
+	if len(doc.Included) != 2 {
+		t.Fatalf("included length = %d, want 2", len(doc.Included))
+	}
+	types := map[string]bool{}
+	for _, inc := range doc.Included {
+		types[inc.Type] = true
+	}
+	if !types["company"] {
+		t.Error("expected company in included")
+	}
+	if !types["sponsor"] {
+		t.Error("expected sponsor in included")
+	}
+}
+
+func TestMapRepresentation_CollectionWithActions(t *testing.T) {
+	rep := hyper.Representation{
+		Kind:  "contacts",
+		Self:  targetPtr("/contacts"),
+		State: hyper.Collection{},
+		Actions: []hyper.Action{
+			{
+				Name:   "create",
+				Rel:    "create",
+				Method: "POST",
+				Target: target("/contacts"),
+				Fields: []hyper.Field{
+					{Name: "name", Type: "text", Required: true},
+				},
+			},
+		},
+	}
+
+	doc := MapRepresentation(rep, nil)
+
+	if !doc.Data.IsMany {
+		t.Fatal("expected collection")
+	}
+	actions, ok := doc.Meta["actions"].([]map[string]any)
+	if !ok {
+		t.Fatalf("meta.actions type = %T, want []map[string]any", doc.Meta["actions"])
+	}
+	if len(actions) != 1 {
+		t.Fatalf("actions length = %d, want 1", len(actions))
+	}
+	if actions[0]["name"] != "create" {
+		t.Errorf("action name = %v, want %q", actions[0]["name"], "create")
+	}
+}
+
 func TestRichTextInAttributes(t *testing.T) {
 	rep := hyper.Representation{
 		Kind: "post",
@@ -350,9 +595,9 @@ func TestRichTextInAttributes(t *testing.T) {
 
 	doc := MapRepresentation(rep, nil)
 
-	body, ok := doc.Data.Attributes["body"].(map[string]any)
+	body, ok := doc.Data.Resource().Attributes["body"].(map[string]any)
 	if !ok {
-		t.Fatalf("body type = %T, want map", doc.Data.Attributes["body"])
+		t.Fatalf("body type = %T, want map", doc.Data.Resource().Attributes["body"])
 	}
 	if body["mediaType"] != "text/markdown" {
 		t.Errorf("mediaType = %v, want text/markdown", body["mediaType"])
