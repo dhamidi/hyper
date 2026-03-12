@@ -2232,7 +2232,7 @@ so that a type can adopt only the extension points that are relevant to it.
 
 ### 18.1 Extension Interfaces
 
-#### 17.1.1 RepresentationProvider
+#### 18.1.1 RepresentationProvider
 
 A type that can present itself as a complete `Representation`.
 
@@ -2247,7 +2247,7 @@ When a codec or renderer encounters a value implementing
 full hypermedia representation, including state, links, actions, and embedded
 representations.
 
-#### 17.1.2 NodeProvider
+#### 18.1.2 NodeProvider
 
 A type that can express its state as a `Node`.
 
@@ -2260,7 +2260,7 @@ type NodeProvider interface {
 This allows domain types to supply structured state for the `State` field of a
 `Representation` without being modified to implement `Node` directly.
 
-#### 17.1.3 ValueProvider
+#### 18.1.3 ValueProvider
 
 A type that can express itself as a `Value`.
 
@@ -2274,7 +2274,7 @@ This allows leaf domain values (e.g. custom identifiers, enumerations, money
 types) to participate in `Object` or `Collection` containers without
 wrapping in `Scalar`.
 
-#### 17.1.4 LinkProvider
+#### 18.1.4 LinkProvider
 
 A type that can contribute navigational links.
 
@@ -2288,7 +2288,7 @@ When constructing a `Representation` from an existing domain type, the builder
 or codec SHOULD merge links returned by `HyperLinks()` into the
 representation's `Links` slice.
 
-#### 17.1.5 ActionProvider
+#### 18.1.5 ActionProvider
 
 A type that can contribute available actions.
 
@@ -2301,6 +2301,22 @@ type ActionProvider interface {
 When constructing a `Representation` from an existing domain type, the builder
 or codec SHOULD merge actions returned by `HyperActions()` into the
 representation's `Actions` slice.
+
+#### 18.1.6 EmbeddedProvider
+
+A type that can contribute embedded sub-representations.
+
+```go
+type EmbeddedProvider interface {
+    HyperEmbedded() map[string][]Representation
+}
+```
+
+When constructing a `Representation` from an existing domain type, the builder
+or codec SHOULD merge embedded representations returned by `HyperEmbedded()`
+into the representation's `Embedded` map. If a slot key already exists in the
+target representation, the provider's representations SHALL be appended to the
+existing slice for that slot.
 
 ### 18.2 Composition Rules
 
@@ -2316,6 +2332,9 @@ implements multiple provider interfaces, the following precedence SHOULD apply:
    of a constructed `Representation`.
 3. `LinkProvider` and `ActionProvider` SHOULD be consulted independently to
    populate `Links` and `Actions` when building a representation from parts.
+4. `EmbeddedProvider` SHOULD be consulted to populate `Embedded` when building
+   a representation from parts, following the same pattern as `LinkProvider`
+   and `ActionProvider`.
 
 ### 18.3 Discovery by Codecs and Renderers
 
@@ -2341,6 +2360,11 @@ func buildRepresentation(v any) Representation {
     }
     if ap, ok := v.(ActionProvider); ok {
         rep.Actions = ap.HyperActions()
+    }
+    if ep, ok := v.(EmbeddedProvider); ok {
+        for slot, reps := range ep.HyperEmbedded() {
+            rep.Embedded[slot] = append(rep.Embedded[slot], reps...)
+        }
     }
 
     return rep
@@ -2383,8 +2407,9 @@ The following questions remain open for later revisions:
    `WithValues` and `WithErrors` (§7.4) provide field derivation helpers.
 3. ~~whether JSON support should target a specific hypermedia media type first~~
    Resolved: see §19.1 item 5.
-4. whether additional provider interfaces (e.g. `EmbeddedProvider`,
-   `MetaProvider`) should be added to the extensibility surface
+4. ~~whether additional provider interfaces (e.g. `EmbeddedProvider`,
+   `MetaProvider`) should be added to the extensibility surface~~
+   Resolved: see §19.1 item 8.
 5. ~~whether provider interfaces should accept a `context.Context` parameter~~
    Resolved: see §19.1 item 6.
 6. ~~whether `Hints` keys should follow a namespacing convention (e.g.
@@ -2427,3 +2452,7 @@ The following questions have been resolved:
    SHOULD use the conventions of their target framework (e.g., `hx-target` for
    htmx). Codecs consume only the keys they recognize and MUST ignore unknown
    keys, which prevents collisions in practice.
+8. **Additional provider interfaces.** Resolved: `EmbeddedProvider` added to
+   §18.1. `MetaProvider` and `HintsProvider` were evaluated but not added —
+   metadata and hints are handler-level concerns, not domain-type concerns, and
+   are better set directly on the `Representation`.
