@@ -157,6 +157,7 @@ type Representation struct {
     Actions  []Action
     Embedded map[string][]Representation
     Meta     map[string]any
+    Hints    map[string]any
 }
 ```
 
@@ -168,7 +169,15 @@ type Representation struct {
 - `Links` SHALL represent navigational controls
 - `Actions` SHALL represent available transitions
 - `Embedded` MAY contain named related or fragment representations
-- `Meta` MAY contain application-specific metadata
+- `Meta` MAY contain application-specific metadata that is independent of
+  rendering — for example, pagination totals, cache directives, or
+  domain-specific annotations. Rendering directives (codec-specific or
+  UI-specific hints) SHOULD use `Hints` instead.
+- `Hints` MAY contain codec-specific or UI-specific rendering directives for
+  the representation as a whole. This parallels `Action.Hints` (§7.2) but
+  applies at the representation level. Common uses include htmx attributes
+  (`hx-trigger`, `hx-swap`, `hx-target`) that apply to the representation's
+  root element.
 
 #### Embedded Representations for Item Lists
 
@@ -822,7 +831,8 @@ following top-level keys:
   "links": [ ... ],
   "actions": [ ... ],
   "embedded": { ... },
-  "meta": { ... }
+  "meta": { ... },
+  "hints": { ... }
 }
 ```
 
