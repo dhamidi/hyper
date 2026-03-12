@@ -703,6 +703,7 @@ type Renderer struct {
 
 func (r Renderer) Respond(http.ResponseWriter, *http.Request, int, Representation) error
 func (r Renderer) RespondAs(http.ResponseWriter, *http.Request, int, string, Representation) error
+func (r Renderer) RespondWithMode(http.ResponseWriter, *http.Request, int, Representation, RenderMode) error
 ```
 
 ### 10.2 Semantics
@@ -711,7 +712,7 @@ func (r Renderer) RespondAs(http.ResponseWriter, *http.Request, int, string, Rep
 
 1. inspect the request `Accept` header
 2. choose the best available codec
-3. encode the representation
+3. encode the representation using `RenderDocument` as the default `RenderMode`
 4. write the chosen response media type
 
 `RespondAs` SHALL:
@@ -719,6 +720,11 @@ func (r Renderer) RespondAs(http.ResponseWriter, *http.Request, int, string, Rep
 1. bypass normal content negotiation
 2. select a codec matching the requested media type
 3. encode the representation using that codec
+
+`RespondWithMode` SHALL behave identically to `Respond` except that the
+supplied `RenderMode` is passed through to the codec via `EncodeOptions.Mode`,
+overriding the default. This allows handlers to emit a fragment (e.g. for htmx
+partial responses) by passing `RenderFragment`.
 
 The renderer SHOULD set the `Content-Type` response header accordingly.
 
