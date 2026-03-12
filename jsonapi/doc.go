@@ -1,6 +1,22 @@
 // Package jsonapi provides codecs that map between hyper.Representation and the
 // JSON:API (https://jsonapi.org/) wire format.
 //
+// This is the recommended codec package for public-facing REST APIs. JSON:API
+// enjoys broad ecosystem support (Ember Data, JSONAPI::Resources, Axios
+// serializers, etc.) and provides a consistent, well-documented wire format
+// that external consumers already understand. Use this package when your API
+// serves browser clients, mobile apps, or third-party integrations.
+//
+// For hyper-to-hyper communication, CLI --json output, debugging, or scenarios
+// that require full round-trip fidelity of every hyper feature, use the built-in
+// native JSON codec (spec §14.3) instead.
+//
+// # Quick Start
+//
+// Register both codecs with a single call:
+//
+//	repCodec, subCodec := jsonapi.DefaultCodecs()
+//
 // This package implements [hyper.RepresentationCodec] and [hyper.SubmissionCodec]
 // to allow hyper-based applications to interoperate with JSON:API-speaking clients
 // such as Ember Data and JSONAPI::Resources.

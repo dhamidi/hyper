@@ -1768,6 +1768,24 @@ package (module `github.com/dhamidi/hyper/jsonapi`) provides a
 representations and the JSON:API wire format. See that package's documentation
 for mapping details and known limitations (e.g., `Action` encoding).
 
+### 14.4 Codec Selection Guidance
+
+Implementations typically register one or more codecs depending on the
+audience and use case. The following guidelines help choose the right codec:
+
+| Scenario | Recommended Codec | Rationale |
+|----------|------------------|-----------|
+| Public REST APIs, browser clients, mobile apps | `jsonapi` (`application/vnd.api+json`) | Broad ecosystem tooling (Ember Data, Axios serializers, JSONAPI::Resources). |
+| Third-party integrations | `jsonapi` | External consumers expect a well-known wire format. |
+| hyper-to-hyper communication | Native JSON (§14.3) | Full fidelity: hints, ordered links, actions, and rich-text all round-trip. |
+| CLI `--json` output | Native JSON (§14.3) | Scripts and tooling benefit from the 1:1 mapping of `Representation`. |
+| Debugging / introspection | Native JSON (§14.3) | No information is dropped or restructured. |
+
+When building a server that serves both audiences, register both codecs and
+let content negotiation (`Accept` header) select the appropriate one at
+request time. The `jsonapi` codec SHOULD be treated as the default for
+public-facing REST endpoints.
+
 ## 15. Examples
 
 ### 15.1 Representation with an Update Action
