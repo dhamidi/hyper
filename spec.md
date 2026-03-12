@@ -486,6 +486,17 @@ type Option struct {
 - `Error` MAY contain a validation message from a failed submission
 - `Options` MAY describe enumerated choices
 
+#### Multi-Value Semantics
+
+For multi-value field types (`checkbox-group`, `multiselect`), multiple
+`Option` entries MAY have `Selected: true` simultaneously. The submitted
+value SHALL be the set of all selected option values.
+
+For multi-value field types, `Field.Value` MAY be a slice (e.g., `[]string`)
+representing the currently selected values. Codecs SHOULD use `Options` with
+`Selected` flags as the canonical source when both `Value` and `Options` are
+present.
+
 #### Semantics
 
 `Field` describes the input contract of an action. It does not prescribe a
@@ -510,6 +521,13 @@ codecs and non-HTML clients (CLI tools, mobile apps) can interpret:
 | `textarea` | Multi-line text input                        |
 | `select`   | Selection from `Options`                     |
 | `checkbox` | Boolean toggle                               |
+| `checkbox-group` | Multiple selections from `Options`; each selected option contributes a value |
+| `multiselect` | Selection of multiple values from `Options` (rendered as a multi-select list or similar) |
+
+The `checkbox-group` and `multiselect` types indicate that the field accepts
+zero or more values. Codecs SHOULD render `checkbox-group` as a group of
+checkboxes and `multiselect` as a `<select multiple>` element (or equivalent
+in non-HTML codecs).
 
 Codecs MAY support additional type values beyond this list. Unknown types
 SHOULD be treated as `text` by codecs that do not recognize them.
