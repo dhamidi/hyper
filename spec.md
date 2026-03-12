@@ -1183,7 +1183,115 @@ func (r *Response) IsSuccess() bool
 func (r *Response) IsError() bool
 ```
 
-### 11.6 Representation Navigation Helpers
+### 11.6 Navigator
+
+The `Navigator` provides stateful traversal of a hyper API. It tracks the current `Representation` and provides fluent methods for following links, submitting actions, and inspecting state.
+
+```go
+// Navigator provides stateful traversal of a hyper API.
+// It tracks the current Representation and provides fluent methods
+// for following links, submitting actions, and inspecting state.
+type Navigator struct {
+    client  *Client
+    current *Response
+    history []*Response
+}
+```
+
+Constructor:
+
+```go
+// Navigate starts a Navigator at the given target.
+// It fetches the target and sets the result as the current position.
+func (c *Client) Navigate(ctx context.Context, target Target) (*Navigator, error)
+```
+
+#### 11.6.1 Core Methods
+
+```go
+// Current returns the current Response (representation + HTTP metadata).
+func (n *Navigator) Current() *Response
+
+// Representation returns the current Representation.
+// Shorthand for n.Current().Representation.
+func (n *Navigator) Representation() Representation
+
+// State returns the current representation's State node.
+func (n *Navigator) State() Node
+
+// Kind returns the current representation's Kind.
+func (n *Navigator) Kind() string
+```
+
+#### 11.6.2 Navigation Methods
+
+```go
+// Follow finds a link by rel in the current representation and fetches it.
+// The result becomes the new current position. The previous position is
+// pushed onto the history stack.
+// Returns ErrLinkNotFound if no link with the given rel exists.
+func (n *Navigator) Follow(ctx context.Context, rel string) error
+
+// Submit finds an action by rel in the current representation and submits it.
+// The result becomes the new current position. The previous position is
+// pushed onto the history stack.
+// Returns ErrActionNotFound if no action with the given rel exists.
+func (n *Navigator) Submit(ctx context.Context, rel string, values map[string]any) error
+
+// FollowLink follows a specific Link (not looked up by rel).
+// Useful when the caller has already located the link.
+func (n *Navigator) FollowLink(ctx context.Context, link Link) error
+
+// SubmitAction submits a specific Action (not looked up by rel).
+// Useful when the caller has already located the action.
+func (n *Navigator) SubmitAction(ctx context.Context, action Action, values map[string]any) error
+
+// Back returns to the previous position in the history stack.
+// Returns ErrNoHistory if the history stack is empty.
+func (n *Navigator) Back() error
+
+// Refresh re-fetches the current position's Self target.
+// Returns an error if the current representation has no Self target.
+func (n *Navigator) Refresh(ctx context.Context) error
+```
+
+#### 11.6.3 Inspection Methods
+
+```go
+// Links returns all links from the current representation.
+func (n *Navigator) Links() []Link
+
+// Actions returns all actions from the current representation.
+func (n *Navigator) Actions() []Action
+
+// FindLink returns the first link with the given rel from the current representation.
+func (n *Navigator) FindLink(rel string) (Link, bool)
+
+// FindAction returns the first action with the given rel from the current representation.
+func (n *Navigator) FindAction(rel string) (Action, bool)
+
+// Embedded returns embedded representations in the given slot from the current representation.
+func (n *Navigator) Embedded(slot string) []Representation
+
+// HasLink returns true if the current representation has a link with the given rel.
+func (n *Navigator) HasLink(rel string) bool
+
+// HasAction returns true if the current representation has an action with the given rel.
+func (n *Navigator) HasAction(rel string) bool
+```
+
+#### 11.6.4 Error Sentinel Values
+
+```go
+var (
+    ErrLinkNotFound   = errors.New("hyper: link not found")
+    ErrActionNotFound = errors.New("hyper: action not found")
+    ErrNoHistory      = errors.New("hyper: no history to go back to")
+    ErrNoSelf         = errors.New("hyper: representation has no self target")
+)
+```
+
+### 11.7 Representation Navigation Helpers
 
 These free functions assist in navigating a `Representation`'s hypermedia controls. They are pure functions with no IO.
 
@@ -1202,7 +1310,7 @@ func FindEmbedded(rep Representation, slot string) []Representation
 func ActionValues(action Action) map[string]any
 ```
 
-### 11.7 Client Constructor
+### 11.8 Client Constructor
 
 ```go
 // NewClient creates a Client with sensible defaults:
@@ -1228,7 +1336,7 @@ func WithAccept(accept string) ClientOption
 
 `WithStaticCredential` wraps a single `Credential` in a read-only `CredentialStore` that always returns it, providing a convenient shorthand for API key or fixed-token authentication.
 
-### 11.8 Target Resolution for Client
+### 11.9 Target Resolution for Client
 
 When resolving a `Target` for an outbound request, the `Client` follows these rules:
 
@@ -1238,7 +1346,7 @@ When resolving a `Target` for an outbound request, the `Client` follows these ru
 
 This means the `Client` works with any server that produces valid JSON per the wire format (§14.3), regardless of whether that server uses `hyper`, `RouteRef`, or any other URL generation strategy.
 
-### 11.9 Usage Examples
+### 11.10 Usage Examples
 
 #### CLI Agent: Fetch Root and Build Commands
 
@@ -1391,7 +1499,60 @@ client.OnUnauthorized = func(ctx context.Context, resp *hyper.Response) (*hyper.
 }
 ```
 
-### 11.10 Design Rationale
+#### Navigator: Stateful Traversal
+
+```go
+client, _ := hyper.NewClient("http://localhost:8080")
+
+nav, _ := client.Navigate(ctx, hyper.Path())
+nav.Follow(ctx, "contacts")
+nav.Submit(ctx, "create", map[string]any{
+    "name": "Ada Lovelace",
+})
+fmt.Println(nav.Kind())
+```
+
+#### Navigator: Conditional Navigation
+
+```go
+nav, _ := client.Navigate(ctx, hyper.Path())
+
+if nav.HasLink("contacts") {
+    nav.Follow(ctx, "contacts")
+
+    // Browse embedded items
+    for _, contact := range nav.Embedded("items") {
+        fmt.Printf("%s: %v\n", contact.Kind, contact.State)
+    }
+
+    // Go back to root
+    nav.Back()
+}
+
+if nav.HasAction("login") {
+    nav.Submit(ctx, "login", map[string]any{
+        "username": "ada",
+        "password": "secret",
+    })
+}
+```
+
+#### Navigator: Server-to-Server Traversal
+
+```go
+nav, _ := client.Navigate(ctx, hyper.Path("/orders/99"))
+// Follow linked resources across the API
+if err := nav.Follow(ctx, "customer"); err == nil {
+    customerState := nav.State()
+    nav.Back() // return to order
+}
+if err := nav.Follow(ctx, "line-items"); err == nil {
+    items := nav.Embedded("items")
+    // process items...
+}
+```
+
+### 11.11 Design Rationale
 
 1. **`HTTPDoer` over `http.RoundTripper`**: `HTTPDoer` wraps `*http.Client` rather than `http.RoundTripper` because the Client needs cookie jar support, redirect policy, and timeout configuration that `*http.Client` provides. Wrapping at the `Do` level lets callers substitute the entire client (for testing, logging, etc.) without reconstructing these behaviors.
 
@@ -1408,6 +1569,16 @@ client.OnUnauthorized = func(ctx context.Context, resp *hyper.Response) (*hyper.
 7. **`OnUnauthorized` as a function, not an interface**: OAuth token refresh is the primary use case for automatic retry on 401. A single callback is simpler than a multi-method interface for this single-purpose hook. The one-retry limit prevents infinite loops when credentials are genuinely invalid. Callers who do not need refresh simply leave the field nil.
 
 8. **Cookie auth remains implicit**: The `HTTPDoer` wraps `*http.Client`, which already provides cookie jar support. Servers that authenticate via `Set-Cookie` on login responses get automatic cookie handling on subsequent requests without any `Credential` involvement. This is by design — cookie management is a transport concern, not a credential concern.
+
+9. **Navigator is opt-in**: `Navigator` wraps `Client`, it does not replace it. The stateless `Fetch`/`Follow`/`Submit` methods remain for callers who want explicit control. Navigator is sugar for the common "walk the API" pattern.
+
+10. **History is bounded**: Implementations SHOULD cap the history stack (e.g., 50 entries) to prevent unbounded memory growth in long traversal sessions. Entries beyond the cap are silently dropped from the bottom of the stack.
+
+11. **Navigator is not concurrency-safe**: A `Navigator` represents a single traversal session. Concurrent use requires separate `Navigator` instances (which can share the same `Client`).
+
+12. **Errors on Follow/Submit do not update position**: When `Follow` or `Submit` returns a non-nil error, the current position is NOT changed. The navigator stays where it was, and the caller can inspect the error and decide how to proceed.
+
+13. **Free functions remain alongside Navigator**: `FindLink`, `FindAction`, etc. remain as free functions. The Navigator's convenience methods (`HasLink`, `FindLink`) delegate to them. This keeps the free functions testable independently and useful outside the Navigator context.
 
 ## 12. HTML Codec
 
