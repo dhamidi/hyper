@@ -17,49 +17,6 @@ type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Credential represents an authentication credential with its placement strategy.
-type Credential struct {
-	// Scheme determines how the credential is attached to requests.
-	// Well-known values: "bearer", "apikey-header", "apikey-query".
-	Scheme string
-
-	// Value is the credential value (token, key, etc.).
-	Value string
-
-	// Header is the header name for "apikey-header" scheme.
-	Header string
-
-	// Param is the query parameter name for "apikey-query" scheme.
-	Param string
-}
-
-// BearerToken returns a Credential that attaches as "Authorization: Bearer <token>".
-func BearerToken(token string) Credential {
-	return Credential{Scheme: "bearer", Value: token}
-}
-
-// APIKeyHeader returns a Credential that attaches the key in the named header.
-func APIKeyHeader(header, key string) Credential {
-	return Credential{Scheme: "apikey-header", Header: header, Value: key}
-}
-
-// APIKeyQuery returns a Credential that appends the key as a query parameter.
-func APIKeyQuery(param, key string) Credential {
-	return Credential{Scheme: "apikey-query", Param: param, Value: key}
-}
-
-// CredentialStore retrieves and persists authentication credentials.
-type CredentialStore interface {
-	// Credential returns the current credential for the given base URL.
-	Credential(ctx context.Context, baseURL *url.URL) (Credential, error)
-
-	// Store persists a credential for the given base URL.
-	Store(ctx context.Context, baseURL *url.URL, cred Credential) error
-
-	// Delete removes the stored credential for the given base URL.
-	Delete(ctx context.Context, baseURL *url.URL) error
-}
-
 // Response wraps a decoded Representation with HTTP metadata.
 type Response struct {
 	// Representation is the decoded hypermedia representation.
@@ -604,19 +561,3 @@ func decodeField(m map[string]any) Field {
 	return f
 }
 
-// staticCredentialStore always returns the same credential.
-type staticCredentialStore struct {
-	cred Credential
-}
-
-func (s *staticCredentialStore) Credential(_ context.Context, _ *url.URL) (Credential, error) {
-	return s.cred, nil
-}
-
-func (s *staticCredentialStore) Store(_ context.Context, _ *url.URL, _ Credential) error {
-	return nil
-}
-
-func (s *staticCredentialStore) Delete(_ context.Context, _ *url.URL) error {
-	return nil
-}
