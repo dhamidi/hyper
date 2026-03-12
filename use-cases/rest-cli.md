@@ -1,6 +1,6 @@
 # Use Case: Hypermedia-Driven REST CLI Client
 
-This document explores building a CLI client that discovers all available commands from a `hyper` API at runtime. The CLI has **no hard-coded endpoints** — it fetches the root `Representation` (§14.5), parses its `Links` and `Actions`, and constructs a command tree dynamically. The example domain is a contacts application.
+This document explores building a CLI client that discovers all available commands from a `hyper` API at runtime. The CLI has **no hard-coded endpoints** — it fetches the root `Representation` (§15.5), parses its `Links` and `Actions`, and constructs a command tree dynamically. The example domain is a contacts application.
 
 ## 1. Overview
 
@@ -11,7 +11,7 @@ Key properties:
 - **Zero hard-coded routes** — the CLI only knows the base URL
 - **Self-documenting** — `Link.Title`, `Field.Label`, and `Field.Help` populate `--help` text
 - **Server-driven evolution** — adding a new `Action` on the server automatically surfaces a new CLI command
-- **Hints-aware** — `Action.Hints` keys like `confirm`, `destructive`, and `hidden` (§15.6) control CLI behavior
+- **Hints-aware** — `Action.Hints` keys like `confirm`, `destructive`, and `hidden` (§16.6) control CLI behavior
 
 ## 2. Discovery Flow
 
@@ -25,7 +25,7 @@ $ cli --base http://localhost:8080/
 
 1. The client checks for stored credentials for the base URL (see [Section 13.6](#136-credential-storage)) and includes them in the request if present
 2. The client sends `GET /` with `Accept: application/vnd.api+json` (and `Authorization: Bearer <token>` if credentials are stored)
-3. The server returns a root `Representation` encoded per the JSON wire format (§13.3) — the representation's `Links` and `Actions` may vary based on authentication state (see [Section 13](#13-authentication))
+3. The server returns a root `Representation` encoded per the JSON wire format (§14.3) — the representation's `Links` and `Actions` may vary based on authentication state (see [Section 13](#13-authentication))
 4. The client parses top-level `Links` and `Actions` to build a command tree
 
 > **Note:** The initial root fetch may return a limited representation if the client is not authenticated. An unauthenticated root might expose only a `login` action, while an authenticated root exposes the full set of links and actions. The CLI should always check for stored credentials before the initial request to ensure the richest possible command tree on startup.
@@ -57,7 +57,7 @@ root := hyper.Representation{
 
 ### 2.3 Root Representation (JSON Wire Format)
 
-On the wire (§13.3), this becomes:
+On the wire (§14.3), this becomes:
 
 ```json
 {
@@ -112,7 +112,7 @@ The CLI uses `application/vnd.api+json` rather than bare `application/json` for 
 
 - Bare `application/json` is ambiguous — it could be any JSON structure
 - `application/vnd.api+json` signals "this is a structured hypermedia JSON document"
-- The spec's JSON wire format (§13.3) defines what that structure looks like
+- The spec's JSON wire format (§14.3) defines what that structure looks like
 - Servers can serve plain `application/json` (just state, no controls) alongside `application/vnd.api+json` (full hypermedia representation)
 
 This distinction allows a server to serve different representations to different clients: a simple mobile app might request `application/json` and receive a flat state-only payload, while the CLI requests `application/vnd.api+json` and receives the full hypermedia representation with links, actions, and embedded resources.
@@ -458,7 +458,7 @@ contact := hyper.Representation{
 }
 ```
 
-On the wire (§13.3):
+On the wire (§14.3):
 
 ```json
 {
@@ -904,7 +904,7 @@ Content-Type: application/vnd.api+json
 
 ### 8.3 Delete
 
-The `delete` `Action` carries `Hints` (§15.6) that affect CLI behavior:
+The `delete` `Action` carries `Hints` (§16.6) that affect CLI behavior:
 
 ```
 $ cli contacts delete 1
@@ -1103,7 +1103,7 @@ $ cli contacts --json
 
 ### 11.3 `--markdown` Flag
 
-Requests `Accept: text/markdown` from the server, which triggers the Markdown codec (§12):
+Requests `Accept: text/markdown` from the server, which triggers the Markdown codec (§13):
 
 ```
 $ cli contacts show 1 --markdown
@@ -1410,7 +1410,7 @@ cli
 └── logout      (from Action rel="logout")
 ```
 
-The `login` action is no longer present — the server omits it for authenticated clients. The `logout` action appears with a `confirm` hint (§15.6) that the CLI uses to prompt the user before executing.
+The `login` action is no longer present — the server omits it for authenticated clients. The `logout` action appears with a `confirm` hint (§16.6) that the CLI uses to prompt the user before executing.
 
 ### 13.4 Logout Flow
 
@@ -1560,12 +1560,12 @@ This use case exercises the following `hyper` types:
 | `Action` | All mutations (`create`, `update`, `delete`) and parameterized queries (`search`). Actions on nested resources (e.g., "Add Note", "Edit Note") work identically to top-level actions |
 | `Field` | Flag generation, validation, completion candidates, default values |
 | `Option` | Enum completion candidates (not shown in contacts but supported for `select` fields) |
-| `Target` with `URL` | Resolved URLs from JSON codec (§13.3.6) |
+| `Target` with `URL` | Resolved URLs from JSON codec (§14.3.6) |
 | `Embedded` representations | Collection items in list and search results (§6.1). `Embedded` representations within nested resources carry their own full hypermedia controls — `Links`, `Actions`, and `Self` targets — enabling recursive navigation at every level |
 | `Node` (`Object`) | Contact and note state as key-value pairs |
 | `Value` (`Scalar`, `RichText`) | Primitive fields, bio content, and note body content |
-| JSON `RepresentationCodec` | Primary codec for all CLI communication (§13) |
-| `Action.Hints` | CLI-specific keys: `confirm`, `destructive`, `hidden` (§15.6) |
+| JSON `RepresentationCodec` | Primary codec for all CLI communication (§14) |
+| `Action.Hints` | CLI-specific keys: `confirm`, `destructive`, `hidden` (§16.6) |
 | `Action.Consumes` | Determines request body content type — `application/vnd.api+json` for hypermedia JSON submissions, `application/x-www-form-urlencoded` for form data, `multipart/form-data` for file uploads |
 | `Action.Produces` | Hints at expected response content type — helps the CLI anticipate response format |
 | `Field.Type: "password"` | Masked interactive input — the CLI prompts without echoing characters when this field type is encountered |
@@ -1736,7 +1736,7 @@ archives := hyper.Representation{
 
 #### 15.2.3 Single Archive with Undo (Server Side)
 
-The individual archive resource carries a `delete` `Action` with a `confirm` hint (§15.6). Deleting the archive restores the archived contacts to their previous state.
+The individual archive resource carries a `delete` `Action` with a `confirm` hint (§16.6). Deleting the archive restores the archived contacts to their previous state.
 
 ```go
 archive := hyper.Representation{
@@ -3078,7 +3078,7 @@ The actions-with-history approach surfaces additional questions for the spec:
 
 - **Conventions for history/audit log `Representations`.** The history collection in this section uses `Kind: "history"` with embedded `Kind: "history-entry"` items. The spec does not define conventions for audit log representations — standard `State` keys for event entries (e.g., `"event"`, `"at"`, `"by"`), or a recommended `Kind` naming pattern. Establishing lightweight conventions would help clients render history views generically without needing to understand each API's custom history schema.
 
-- **`Action` confirm hint for non-destructive operations.** The `confirm` hint (§15.6) is used here for archive, which is not destructive (it is reversible via `unarchive`). The spec should clarify that `confirm` is appropriate for any operation that warrants user confirmation, not just destructive ones. Alternatively, the spec could introduce a separate hint like `"prompt"` for non-destructive confirmations, reserving `"confirm"` for destructive actions paired with `"destructive": true`.
+- **`Action` confirm hint for non-destructive operations.** The `confirm` hint (§16.6) is used here for archive, which is not destructive (it is reversible via `unarchive`). The spec should clarify that `confirm` is appropriate for any operation that warrants user confirmation, not just destructive ones. Alternatively, the spec could introduce a separate hint like `"prompt"` for non-destructive confirmations, reserving `"confirm"` for destructive actions paired with `"destructive": true`.
 
 - **State-dependent `Action` availability.** The archived contact loses its `update` and `delete` `Actions` and gains an `unarchive` `Action`. This is standard hypermedia — the server tailors affordances to current state. The spec should explicitly note that `Actions` on a `Representation` MAY change between requests as the resource's state evolves, and clients MUST NOT cache or assume a fixed set of `Actions` for a given resource.
 
@@ -3093,6 +3093,8 @@ After playing through the full contacts CLI scenario, the following gaps and que
 - **`"actions"` link rel convention (RESOLVED).** The spec (§7.1) now defines a recommended `Link` with `rel: "actions"` for discovering available actions. Actions should be embedded directly in the `Actions` array when possible; the `"actions"` link is an escape hatch for large or lazily-computed action sets.
 
 - **Async / job-like resource conventions (RESOLVED).** The spec (§7.2) now defines async action conventions: `Action.Hints` MAY include `"async": true` to signal that the response is an async job. Job representations use a `"status"` state key with recommended values (`"pending"`, `"processing"`, `"complete"`, `"failed"`), `Meta.poll-interval` for polling guidance, dynamic `Links` for result delivery, and optional `"progress"` and `"error"` state keys. See [Section 16.3](use-cases/rest-cli.md#163-export-as-an-action-with-history) for a worked example.
+
+- **No programmatic client type (RESOLVED).** The spec (§11) now defines `hyper.Client` — a programmatic HTTP client for consuming hyper APIs. The `Client` provides `Fetch`, `Submit`, and `Follow` operations, with all IO dependencies (`HTTPDoer`, `CredentialStore`) expressed through interfaces. Navigation helpers (`FindLink`, `FindAction`, `FindEmbedded`, `ActionValues`) are provided as pure functions. This resolves the gap where the CLI agent had no first-class client type to drive hypermedia interactions.
 
 **Open items:**
 
@@ -3118,7 +3120,7 @@ After playing through the full contacts CLI scenario, the following gaps and que
 
 - **Standard hint for auth-required actions.** Should there be a hint key like `"auth-required": true` on actions that will fail without authentication? This would let a CLI pre-check and prompt for login before attempting the action, rather than waiting for a 401 response. Without this, the client must either attempt the action optimistically and handle the 401, or infer auth requirements from the absence of the action in unauthenticated representations. A standard hint key would make this explicit.
 
-- **Recommended JSON content type.** The spec's JSON codec section (§13) does not specify a media type identifier for the `hyper` JSON wire format. The spec SHOULD recommend `application/vnd.api+json` as the content type for JSON representations that include full hypermedia controls (links, actions, embedded). This distinguishes hypermedia-aware JSON responses from plain `application/json` data payloads. Servers that support both can use content negotiation to serve the appropriate format.
+- **Recommended JSON content type.** The spec's JSON codec section (§14) does not specify a media type identifier for the `hyper` JSON wire format. The spec SHOULD recommend `application/vnd.api+json` as the content type for JSON representations that include full hypermedia controls (links, actions, embedded). This distinguishes hypermedia-aware JSON responses from plain `application/json` data payloads. Servers that support both can use content negotiation to serve the appropriate format.
 
 - **Default `Consumes` behavior.** The spec does not state what content type a client should assume when `Action.Consumes` is empty. The spec SHOULD clarify: when `Consumes` is absent, clients SHOULD default to `application/vnd.api+json` for actions with fields, and send no body for actions without fields.
 

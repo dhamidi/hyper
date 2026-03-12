@@ -141,6 +141,11 @@ The package SHOULD expose these core concepts:
 - `RepresentationCodec`
 - `SubmissionCodec`
 - `Renderer`
+- `Client`
+- `HTTPDoer`
+- `CredentialStore`
+- `Response`
+- `FindLink`, `FindAction`, `FindEmbedded`, `ActionValues`
 
 ## 6. Core Model
 
@@ -962,13 +967,336 @@ The `Renderer` is intended for responses that carry a structured
 `Representation`. Handlers that produce non-representational responses are
 expected to use standard `net/http` patterns directly.
 
-## 11. HTML Codec
+## 11. Client
 
-### 11.1 HTML Role
+The `Client` provides programmatic access to hyper APIs. It fetches `Representations`, follows `Links`, and submits `Actions`. All IO is mediated through interfaces so that transport, credential management, and codec selection can be replaced independently.
+
+### 11.1 Client Struct
+
+```go
+type Client struct {
+    // Transport executes HTTP requests. Defaults to http.DefaultClient.
+    Transport HTTPDoer
+
+    // Codecs maps media types to RepresentationCodecs for decoding responses.
+    // The Client selects a codec based on the response Content-Type header.
+    // At minimum, a JSON codec for "application/vnd.api+json" SHOULD be registered.
+    Codecs []RepresentationCodec
+
+    // SubmissionCodecs maps media types to SubmissionCodecs for encoding request bodies.
+    // The Client selects a codec based on Action.Consumes.
+    SubmissionCodecs []SubmissionCodec
+
+    // Credentials provides authentication tokens for requests.
+    // When non-nil, the Client calls Credentials.Token before each request
+    // and attaches the result as an Authorization header.
+    // When nil, requests are sent without authentication.
+    Credentials CredentialStore
+
+    // BaseURL is the root URL of the API. All relative Target URLs
+    // are resolved against this base. MUST be an absolute URL.
+    BaseURL *url.URL
+
+    // Accept is the Accept header value sent with GET requests.
+    // Defaults to "application/vnd.api+json" if empty.
+    Accept string
+}
+```
+
+### 11.2 HTTPDoer Interface
+
+The `HTTPDoer` interface abstracts HTTP request execution. The default implementation is `*http.Client` from `net/http`, which satisfies this interface.
+
+```go
+// HTTPDoer executes an HTTP request and returns the response.
+// *http.Client satisfies this interface.
+type HTTPDoer interface {
+    Do(*http.Request) (*http.Response, error)
+}
+```
+
+Callers MAY provide custom implementations for:
+- logging and tracing
+- retry with backoff
+- circuit breaking
+- testing (mock responses)
+
+### 11.3 CredentialStore Interface
+
+The `CredentialStore` interface abstracts credential retrieval and persistence. The Client calls `Token` before each request to obtain the current credential. The Client calls `Store` after a successful login action to persist new credentials.
+
+```go
+// CredentialStore retrieves and persists authentication credentials.
+type CredentialStore interface {
+    // Token returns the current bearer token for the given base URL.
+    // Returns ("", nil) when no credential is stored.
+    Token(ctx context.Context, baseURL *url.URL) (string, error)
+
+    // Store persists a bearer token for the given base URL.
+    Store(ctx context.Context, baseURL *url.URL, token string) error
+
+    // Delete removes the stored credential for the given base URL.
+    Delete(ctx context.Context, baseURL *url.URL) error
+}
+```
+
+`hyper` SHOULD provide a default file-based implementation:
+
+```go
+// FileCredentialStore stores credentials in a JSON file on disk.
+// The default path is ~/.config/hyper/credentials.json.
+type FileCredentialStore struct {
+    Path string
+}
+```
+
+### 11.4 Core Operations
+
+#### 11.4.1 Fetch
+
+`Fetch` sends a GET request to the given `Target` and decodes the response into a `Representation`.
+
+```go
+func (c *Client) Fetch(ctx context.Context, target Target) (*Response, error)
+```
+
+The method:
+1. Resolves `target` to an absolute URL against `c.BaseURL`
+2. Calls `c.Credentials.Token` (if non-nil) and attaches the `Authorization: Bearer <token>` header
+3. Sets the `Accept` header to `c.Accept` (defaulting to `"application/vnd.api+json"`)
+4. Executes the request via `c.Transport.Do`
+5. Selects a `RepresentationCodec` from `c.Codecs` based on the response `Content-Type`
+6. Decodes the response body into a `Representation`
+7. Returns a `*Response` containing the decoded `Representation`, HTTP status code, and response headers
+
+#### 11.4.2 Submit
+
+`Submit` executes an `Action` with the given field values.
+
+```go
+func (c *Client) Submit(ctx context.Context, action Action, values map[string]any) (*Response, error)
+```
+
+The method:
+1. Resolves `action.Target` to an absolute URL against `c.BaseURL`
+2. If `action.Method` is `GET`, encodes `values` as query parameters and sends a GET request
+3. Otherwise, selects a `SubmissionCodec` from `c.SubmissionCodecs` based on `action.Consumes` (defaulting to `"application/vnd.api+json"` when `Consumes` is empty and `values` is non-empty)
+4. Encodes `values` into the request body using the selected codec
+5. Sets the `Content-Type` header to the selected media type
+6. Calls `c.Credentials.Token` (if non-nil) and attaches the `Authorization` header
+7. Sets the `Accept` header
+8. Executes the request via `c.Transport.Do`
+9. Decodes the response body into a `Representation` (same codec selection as `Fetch`)
+10. Returns a `*Response`
+
+#### 11.4.3 Follow
+
+`Follow` is a convenience for `Fetch` that takes a `Link` instead of a `Target`.
+
+```go
+func (c *Client) Follow(ctx context.Context, link Link) (*Response, error)
+```
+
+Equivalent to `c.Fetch(ctx, link.Target)`.
+
+### 11.5 Response
+
+The `Response` wraps a decoded `Representation` with HTTP metadata.
+
+```go
+type Response struct {
+    // Representation is the decoded hypermedia representation.
+    Representation Representation
+
+    // StatusCode is the HTTP status code.
+    StatusCode int
+
+    // Header contains the response headers.
+    Header http.Header
+
+    // Body is the raw response body, available for passthrough
+    // (e.g., --json output mode). It is the caller's responsibility
+    // to close it. If the Representation was decoded successfully,
+    // Body will be a reader over the already-read bytes.
+    Body io.ReadCloser
+}
+
+// IsSuccess returns true if StatusCode is in the 2xx range.
+func (r *Response) IsSuccess() bool
+
+// IsError returns true if StatusCode is 4xx or 5xx.
+func (r *Response) IsError() bool
+```
+
+### 11.6 Representation Navigation Helpers
+
+These free functions assist in navigating a `Representation`'s hypermedia controls. They are pure functions with no IO.
+
+```go
+// FindLink returns the first Link with the given rel, or false if not found.
+func FindLink(rep Representation, rel string) (Link, bool)
+
+// FindAction returns the first Action with the given rel, or false if not found.
+func FindAction(rep Representation, rel string) (Action, bool)
+
+// FindEmbedded returns the embedded representations in the given slot, or nil.
+func FindEmbedded(rep Representation, slot string) []Representation
+
+// ActionValues extracts default values from an Action's Fields as a map.
+// This is useful for pre-populating form values before user overrides.
+func ActionValues(action Action) map[string]any
+```
+
+### 11.7 Client Constructor
+
+```go
+// NewClient creates a Client with sensible defaults:
+// - Transport: http.DefaultClient
+// - Codecs: [JSONRepresentationCodec]
+// - SubmissionCodecs: [JSONSubmissionCodec, FormSubmissionCodec]
+// - Accept: "application/vnd.api+json"
+func NewClient(baseURL string, opts ...ClientOption) (*Client, error)
+```
+
+`ClientOption` follows the functional options pattern:
+
+```go
+type ClientOption func(*Client)
+
+func WithTransport(t HTTPDoer) ClientOption
+func WithCredentials(cs CredentialStore) ClientOption
+func WithCodec(c RepresentationCodec) ClientOption
+func WithSubmissionCodec(c SubmissionCodec) ClientOption
+func WithAccept(accept string) ClientOption
+```
+
+### 11.8 Target Resolution for Client
+
+When resolving a `Target` for an outbound request, the `Client` follows these rules:
+
+1. If `Target.URL` is non-nil and absolute, use it directly
+2. If `Target.URL` is non-nil and relative, resolve it against `c.BaseURL`
+3. If `Target.Route` is non-nil, the `Client` does NOT support `RouteRef` resolution — `RouteRef` is a server-side concept. On the wire (§14.3), route references are resolved to concrete URLs by the server's `Renderer` before encoding. The `Client` only sees resolved URLs.
+
+This means the `Client` works with any server that produces valid JSON per the wire format (§14.3), regardless of whether that server uses `hyper`, `RouteRef`, or any other URL generation strategy.
+
+### 11.9 Usage Examples
+
+#### CLI Agent: Fetch Root and Build Commands
+
+```go
+client, _ := hyper.NewClient("http://localhost:8080",
+    hyper.WithCredentials(&hyper.FileCredentialStore{}),
+)
+
+// Fetch root representation
+resp, err := client.Fetch(ctx, hyper.Path())
+if err != nil {
+    log.Fatal(err)
+}
+root := resp.Representation
+
+// Build command tree from links and actions
+for _, link := range root.Links {
+    fmt.Printf("Link: %s -> %s\n", link.Rel, link.Target.URL)
+}
+for _, action := range root.Actions {
+    fmt.Printf("Action: %s (%s)\n", action.Rel, action.Method)
+}
+```
+
+#### CLI Agent: Submit an Action
+
+```go
+// User wants to create a contact
+action, ok := hyper.FindAction(contactList, "create")
+if !ok {
+    log.Fatal("create action not found")
+}
+
+resp, err := client.Submit(ctx, action, map[string]any{
+    "name":  "Alan Turing",
+    "email": "alan@example.com",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+if resp.IsSuccess() {
+    created := resp.Representation
+    fmt.Printf("Created: %s\n", created.Kind)
+}
+```
+
+#### Server-to-Server: Follow Links Across Services
+
+```go
+// Service A fetches a representation from Service B
+client, _ := hyper.NewClient("http://service-b:8080")
+
+resp, err := client.Fetch(ctx, hyper.Path("/orders/99"))
+if err != nil {
+    log.Fatal(err)
+}
+
+// Follow a link to a related resource
+customerLink, ok := hyper.FindLink(resp.Representation, "customer")
+if ok {
+    custResp, _ := client.Follow(ctx, customerLink)
+    fmt.Printf("Customer: %v\n", custResp.Representation.State)
+}
+```
+
+#### Handling Authentication
+
+```go
+client, _ := hyper.NewClient("http://localhost:8080",
+    hyper.WithCredentials(&hyper.FileCredentialStore{
+        Path: "~/.config/myapp/credentials.json",
+    }),
+)
+
+// Fetch root — may be unauthenticated
+resp, _ := client.Fetch(ctx, hyper.Path())
+
+// Check for login action
+loginAction, needsAuth := hyper.FindAction(resp.Representation, "login")
+if needsAuth {
+    // Submit login
+    authResp, _ := client.Submit(ctx, loginAction, map[string]any{
+        "username": "ada",
+        "password": "secret",
+    })
+
+    // Extract and store token
+    if token, ok := authResp.Representation.State.(hyper.Object)["token"]; ok {
+        client.Credentials.Store(ctx, client.BaseURL, token.(hyper.Scalar).V.(string))
+    }
+
+    // Re-fetch root with credentials
+    resp, _ = client.Fetch(ctx, hyper.Path())
+}
+```
+
+### 11.10 Design Rationale
+
+1. **`HTTPDoer` over `http.RoundTripper`**: `HTTPDoer` wraps `*http.Client` rather than `http.RoundTripper` because the Client needs cookie jar support, redirect policy, and timeout configuration that `*http.Client` provides. Wrapping at the `Do` level lets callers substitute the entire client (for testing, logging, etc.) without reconstructing these behaviors.
+
+2. **`CredentialStore` as a separate interface**: Authentication is an IO dependency that varies between CLI (file-based), server-to-server (environment variables, vault), and testing (hardcoded tokens). Expressing it as an interface lets each context provide its own implementation without subclassing or configuration flags.
+
+3. **No `Resolver` on Client**: The server-side `Resolver` (§8.2) converts abstract `Target` values (including `RouteRef`) to URLs at render time. The Client operates on the wire format where all targets are already resolved to URLs. Including a `Resolver` on the Client would conflate server and client concerns.
+
+4. **`Response` wraps `Representation`**: Returning a `Response` rather than just a `Representation` gives callers access to HTTP metadata (status codes, headers) needed for error handling, caching, and content negotiation. The raw `Body` is available for passthrough (e.g., `--json` mode in the CLI).
+
+5. **Navigation helpers are free functions**: `FindLink`, `FindAction`, `FindEmbedded`, and `ActionValues` are pure functions, not methods on `Client`. This keeps them testable without HTTP setup and usable in contexts beyond the client (e.g., server-side representation construction).
+
+## 12. HTML Codec
+
+### 12.1 HTML Role
 
 HTML SHALL be treated as a first-class target format.
 
-### 11.2 Action Rendering
+### 12.2 Action Rendering
 
 An HTML codec SHOULD:
 
@@ -978,7 +1306,7 @@ An HTML codec SHOULD:
 - render non-`GET` actions using a form submission mechanism appropriate for
   the host application
 
-### 11.3 Embedded Representations
+### 12.3 Embedded Representations
 
 An HTML codec SHOULD support:
 
@@ -986,7 +1314,7 @@ An HTML codec SHOULD support:
 - fragment rendering
 - nested rendering of embedded representations
 
-### 11.4 Codec-Specific Hints
+### 12.4 Codec-Specific Hints
 
 `Action.Hints` MAY carry codec-specific or framework-specific hint keys.
 
@@ -995,13 +1323,13 @@ interpret hint keys that are relevant to their output format. See the
 Interaction Points section for concrete examples of how different front-end
 frameworks use `Hints`.
 
-## 12. Markdown Codec
+## 13. Markdown Codec
 
-### 12.1 Markdown Role
+### 13.1 Markdown Role
 
 Markdown SHOULD be treated as a read-oriented alternate representation.
 
-### 12.2 Limitations
+### 13.2 Limitations
 
 A Markdown codec MAY degrade actions, because Markdown does not natively model
 interactive form controls.
@@ -1012,14 +1340,14 @@ A Markdown codec MAY:
 - render actions as prose, lists, or reference blocks
 - omit UI-specific hints
 
-## 13. JSON Codec
+## 14. JSON Codec
 
-### 13.1 JSON Role
+### 14.1 JSON Role
 
 JSON support SHOULD preserve hypermedia semantics rather than reducing a
 representation to plain state only.
 
-### 13.2 Minimum Behavior
+### 14.2 Minimum Behavior
 
 A JSON codec SHOULD preserve:
 
@@ -1028,7 +1356,7 @@ A JSON codec SHOULD preserve:
 - actions
 - embedded representations
 
-### 13.3 JSON Wire Format
+### 14.3 JSON Wire Format
 
 A JSON codec SHOULD encode a `Representation` as a JSON object with the
 following top-level keys:
@@ -1049,7 +1377,7 @@ following top-level keys:
 Keys that are empty or absent in the source representation MAY be omitted
 from the JSON output.
 
-#### 13.3.1 State Encoding
+#### 14.3.1 State Encoding
 
 State values SHALL be encoded according to their type:
 
@@ -1060,7 +1388,7 @@ State values SHALL be encoded according to their type:
 - `Object` — encoded as a JSON object whose keys map to encoded values.
 - `Collection` — encoded as a JSON array of encoded values.
 
-#### 13.3.2 Link Encoding
+#### 14.3.2 Link Encoding
 
 Each `Link` SHALL be encoded as a JSON object:
 
@@ -1076,7 +1404,7 @@ Each `Link` SHALL be encoded as a JSON object:
 The `href` key SHALL contain the resolved target URL. The `title` and `type`
 keys MAY be omitted when empty.
 
-#### 13.3.3 Action Encoding
+#### 14.3.3 Action Encoding
 
 Each `Action` SHALL be encoded as a JSON object:
 
@@ -1096,7 +1424,7 @@ Each `Action` SHALL be encoded as a JSON object:
 The `href` key SHALL contain the resolved target URL. Keys with empty or
 zero values MAY be omitted.
 
-#### 13.3.4 Field Encoding
+#### 14.3.4 Field Encoding
 
 Each `Field` SHALL be encoded as a JSON object:
 
@@ -1117,20 +1445,20 @@ Each `Field` SHALL be encoded as a JSON object:
 Boolean fields that are `false` and string fields that are empty MAY be
 omitted.
 
-#### 13.3.5 Embedded Representation Encoding
+#### 14.3.5 Embedded Representation Encoding
 
 The `embedded` key SHALL be a JSON object whose keys are slot names and
 whose values are arrays of encoded representations (following the same
 top-level structure recursively).
 
-#### 13.3.6 Target Encoding
+#### 14.3.6 Target Encoding
 
 In JSON output, targets SHALL be represented as resolved URL strings under
 the `href` key. The `self` field SHALL be encoded as
 `{"href": "<resolved-url>"}` or omitted when absent. The `Target.URL` field
 (a `*url.URL`) SHALL be serialized to its string form via `URL.String()`.
 
-#### 13.3.7 Divergence from Existing Formats
+#### 14.3.7 Divergence from Existing Formats
 
 The `hyper` JSON wire format is intentionally self-contained and does not
 conform to HAL, Siren, or JSON:API. Key differences:
@@ -1144,9 +1472,9 @@ conform to HAL, Siren, or JSON:API. Key differences:
 Implementations that need interoperability with these formats SHOULD provide
 separate codec implementations.
 
-## 14. Examples
+## 15. Examples
 
-### 14.1 Representation with an Update Action
+### 15.1 Representation with an Update Action
 
 ```go
 rep := hyper.Representation{
@@ -1175,7 +1503,7 @@ rep := hyper.Representation{
 }
 ```
 
-### 14.2 Embedded Inline Field Editor
+### 15.2 Embedded Inline Field Editor
 
 ```go
 rep := hyper.Representation{
@@ -1216,7 +1544,7 @@ rep := hyper.Representation{
 }
 ```
 
-### 14.3 Handler with Negotiated HTML or Markdown and Form Decoding
+### 15.3 Handler with Negotiated HTML or Markdown and Form Decoding
 
 ```go
 func (a *App) NewContact(w http.ResponseWriter, r *http.Request) {
@@ -1262,7 +1590,7 @@ func (a *App) NewContact(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### 14.4 Explicit Response Format
+### 15.4 Explicit Response Format
 
 ```go
 func (a *App) ContactPreview(w http.ResponseWriter, r *http.Request) {
@@ -1277,7 +1605,7 @@ func (a *App) ContactPreview(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### 14.5 Root Representation (API Entry Point)
+### 15.5 Root Representation (API Entry Point)
 
 A discovery-driven client needs a well-known entry point from which to
 begin navigating the API. A "root" representation serves this purpose: it
@@ -1312,13 +1640,13 @@ Machine clients (CLI tools, mobile apps, third-party integrations) SHOULD
 use the root representation as their starting point and follow links
 rather than hard-coding endpoint URLs.
 
-## 15. Interaction Points
+## 16. Interaction Points
 
 This section shows how `hyper` integrates with the broader Go ecosystem
 through short, focused examples. Each subsection poses a concrete question
 and answers it with minimal code.
 
-### 15.1 Routing with `github.com/dhamidi/dispatch`
+### 16.1 Routing with `github.com/dhamidi/dispatch`
 
 **How do I resolve `hyper.Target` route references using the `dispatch` router?**
 
@@ -1347,7 +1675,7 @@ func (r DispatchResolver) ResolveTarget(_ context.Context, t hyper.Target) (*url
 }
 ```
 
-### 15.2 Routing with `net/http`'s `http.ServeMux`
+### 16.2 Routing with `net/http`'s `http.ServeMux`
 
 **How do I use `hyper.Target` with the standard library's `http.ServeMux`,
 which does not support reverse routing?**
@@ -1398,7 +1726,7 @@ func contactHandler(w http.ResponseWriter, r *http.Request) {
 For named-route support with the standard library, a small route registry
 helper can map route names to URL patterns at startup.
 
-### 15.3 HTMX with `html/template`
+### 16.3 HTMX with `html/template`
 
 **How do I render a `hyper.Action` as an htmx-enhanced form using Go's
 `html/template`?**
@@ -1441,7 +1769,7 @@ Render the hints in a template:
 framework-specific attributes (e.g. `hx-target`, `hx-swap`, `hx-push-url`,
 `hx-select`) are carried as plain key-value pairs.
 
-### 15.4 Hotwire (Turbo + Stimulus)
+### 16.4 Hotwire (Turbo + Stimulus)
 
 **How do I integrate `hyper` representations with Hotwire's Turbo Frames
 and Stimulus controllers?**
@@ -1494,7 +1822,7 @@ Render in a template with Turbo Frame wrapping and Stimulus attributes:
 The pattern is the same as for htmx: framework-specific attributes flow
 through the open `Hints` and `Meta` maps without any core model changes.
 
-### 15.5 Component Abstraction with `github.com/dhamidi/htmlc`
+### 16.5 Component Abstraction with `github.com/dhamidi/htmlc`
 
 **How do I render a `hyper.Representation` as an `htmlc` component tree?**
 
@@ -1548,7 +1876,7 @@ func contactHandler(eng *htmlc.Engine, w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### 15.6 CLI Client Hints
+### 16.6 CLI Client Hints
 
 **How do I use `Action.Hints` to improve the experience for non-HTML clients
 such as CLI tools?**
@@ -1584,7 +1912,7 @@ recognize them SHOULD ignore them. HTML codecs might render `destructive`
 actions with a warning style, while CLI clients might display a confirmation
 prompt for actions carrying a `confirm` hint.
 
-## 16. Compliance Requirements
+## 17. Compliance Requirements
 
 A conforming implementation of `hyper` MUST:
 
@@ -1602,9 +1930,9 @@ A conforming implementation SHOULD:
 3. provide a JSON hypermedia codec
 4. provide renderer helpers for negotiated and explicit response formats
 5. support field-level validation feedback in action fields
-6. define the extension interfaces specified in section 17
+6. define the extension interfaces specified in section 18
 
-## 17. Extensibility (Draft)
+## 18. Extensibility (Draft)
 
 This section is a **draft** and subject to change.
 
@@ -1612,7 +1940,7 @@ Existing Go types SHOULD be able to participate in the hypermedia system by
 implementing narrow, opt-in interfaces. Each interface maps to a single concern
 so that a type can adopt only the extension points that are relevant to it.
 
-### 17.1 Extension Interfaces
+### 18.1 Extension Interfaces
 
 #### 17.1.1 RepresentationProvider
 
@@ -1684,7 +2012,7 @@ When constructing a `Representation` from an existing domain type, the builder
 or codec SHOULD merge actions returned by `HyperActions()` into the
 representation's `Actions` slice.
 
-### 17.2 Composition Rules
+### 18.2 Composition Rules
 
 A single type MAY implement any combination of these interfaces. When a type
 implements multiple provider interfaces, the following precedence SHOULD apply:
@@ -1699,7 +2027,7 @@ implements multiple provider interfaces, the following precedence SHOULD apply:
 3. `LinkProvider` and `ActionProvider` SHOULD be consulted independently to
    populate `Links` and `Actions` when building a representation from parts.
 
-### 17.3 Discovery by Codecs and Renderers
+### 18.3 Discovery by Codecs and Renderers
 
 Codecs and renderers SHOULD use Go type assertions to discover provider
 interfaces on values passed to them. They MUST NOT require reflection or code
@@ -1729,7 +2057,7 @@ func buildRepresentation(v any) Representation {
 }
 ```
 
-### 17.4 Requirements
+### 18.4 Requirements
 
 - Extension interfaces MUST be optional; types that do not implement them
   SHALL continue to work through manual `Representation` construction.
@@ -1740,7 +2068,7 @@ func buildRepresentation(v any) Representation {
 - Implementations MUST NOT use reflection to discover these interfaces;
   standard Go type assertions SHALL be used.
 
-### 17.5 Compliance
+### 18.5 Compliance
 
 A conforming implementation of `hyper` SHOULD:
 
@@ -1754,7 +2082,7 @@ A conforming implementation MAY:
 2. accept provider interfaces on values nested inside `Object` and
    `Collection` containers
 
-## 18. Open Questions
+## 19. Open Questions
 
 The following questions remain open for later revisions:
 
@@ -1769,7 +2097,7 @@ The following questions remain open for later revisions:
 6. whether `Hints` keys should follow a namespacing convention (e.g.
    `htmx:target` vs `hx-target`) to avoid collisions across frameworks
 
-### 18.1 Resolved
+### 19.1 Resolved
 
 The following questions have been resolved:
 
