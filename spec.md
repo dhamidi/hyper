@@ -275,6 +275,38 @@ Codecs MAY:
 - preserve `text/markdown` as Markdown
 - surface rich text as typed JSON
 
+### 6.3.2 RichText Convenience Constructors
+
+The library SHALL provide convenience constructors for common `RichText`
+media types:
+
+```go
+// Markdown returns a RichText value with MediaType "text/markdown".
+//
+//   hyper.Markdown("Ada Lovelace wrote the first algorithm.")
+//   // equivalent to:
+//   // hyper.RichText{MediaType: "text/markdown", Source: "Ada Lovelace wrote the first algorithm."}
+func Markdown(source string) RichText
+
+// PlainText returns a RichText value with MediaType "text/plain".
+//
+//   hyper.PlainText("Hello, world.")
+//   // equivalent to:
+//   // hyper.RichText{MediaType: "text/plain", Source: "Hello, world."}
+func PlainText(source string) RichText
+```
+
+These are thin wrappers that produce the same `RichText` values manual
+construction produces. They are particularly useful inside `StateFrom` calls:
+
+```go
+hyper.StateFrom(
+    "id", c.ID,
+    "name", c.Name,
+    "bio", hyper.Markdown(c.Bio),
+)
+```
+
 ### 6.4 State Construction Helpers
 
 Building `Object` values manually requires wrapping every leaf in `Scalar`,
@@ -307,6 +339,22 @@ func StateFrom(pairs ...any) Object
 
 `StateFrom` is a thin wrapper — it produces the same `Object` map that manual
 construction produces. Codecs and renderers see no difference.
+
+Because `RichText` implements the `Value` interface, the `Markdown()` and
+`PlainText()` convenience constructors (§6.3.2) compose naturally with
+`StateFrom`:
+
+```go
+hyper.StateFrom(
+    "id", c.ID,
+    "name", c.Name,
+    "bio", hyper.Markdown(c.Bio),
+)
+```
+
+The `Markdown(c.Bio)` call produces a `RichText` value, which `StateFrom`
+passes through as-is (it already implements `Value`). Scalar values like
+`c.ID` and `c.Name` are wrapped in `Scalar{V: ...}` automatically.
 
 ## 7. Hypermedia Controls
 
@@ -364,17 +412,13 @@ These are standard IANA link relations. Clients MAY use the presence of a
 a `next` link indicates the current page is the last.
 
 Pagination links SHOULD be expressed via `RouteRef` with `Query` parameters
-(see §8.1), avoiding manual URL construction:
+(see §8.1), avoiding manual URL construction. Using the `Route` convenience
+constructor (§8.1.2):
 
 ```go
 hyper.Link{
-    Rel: "next",
-    Target: hyper.Target{
-        Route: &hyper.RouteRef{
-            Name:  "contacts.list",
-            Query: url.Values{"page": {"3"}},
-        },
-    },
+    Rel:    "next",
+    Target: hyper.Route("contacts.list").WithQuery(url.Values{"page": {"3"}}),
 }
 ```
 
@@ -385,6 +429,21 @@ hyper.Link{
     Rel:    "next",
     Target: hyper.Path("contacts").WithQuery(url.Values{"page": {"3"}}),
 }
+```
+
+### 7.1.1 Link Convenience Constructor
+
+The library SHALL provide a convenience constructor for the common case
+where only `Rel` and `Target` are needed:
+
+```go
+// NewLink constructs a Link with the given rel and target.
+// Optional fields (Title, Type) can be set on the returned value.
+//
+//   hyper.NewLink("next", hyper.Route("contacts.list").WithQuery(url.Values{"page": {"3"}}))
+//   // equivalent to:
+//   // hyper.Link{Rel: "next", Target: hyper.Route("contacts.list").WithQuery(url.Values{"page": {"3"}})}
+func NewLink(rel string, target Target) Link
 ```
 
 ### 7.2 Action
@@ -513,6 +572,22 @@ An action is the core semantic primitive.
 An HTML codec MAY render an action with fields as a `<form>`, but the core
 model SHALL NOT require a separate `Form` type.
 
+### 7.2.1 Action Convenience Constructor
+
+The library SHALL provide a convenience constructor for actions with the
+three most common fields:
+
+```go
+// NewAction constructs an Action with the given name, HTTP method, and target.
+// Optional fields (Rel, Consumes, Produces, Fields, Hints) can be set on the
+// returned value.
+//
+//   hyper.NewAction("Save", "PUT", hyper.Route("contacts.update", "id", "42"))
+//   // equivalent to:
+//   // hyper.Action{Name: "Save", Method: "PUT", Target: hyper.Route("contacts.update", "id", "42")}
+func NewAction(name, method string, target Target) Action
+```
+
 ### 7.3 Field
 
 ```go
@@ -587,6 +662,22 @@ in non-HTML codecs).
 
 Codecs MAY support additional type values beyond this list. Unknown types
 SHOULD be treated as `text` by codecs that do not recognize them.
+
+### 7.3.2 Field Convenience Constructor
+
+The library SHALL provide a convenience constructor for fields with name
+and type:
+
+```go
+// NewField constructs a Field with the given name and type.
+// Optional fields (Value, Required, Label, Help, Options, Error, ReadOnly)
+// can be set on the returned value.
+//
+//   hyper.NewField("email", "email")
+//   // equivalent to:
+//   // hyper.Field{Name: "email", Type: "email"}
+func NewField(name, fieldType string) Field
+```
 
 ### 7.4 Field Convenience Functions
 
@@ -696,7 +787,29 @@ func ParseTarget(rawURL string) (Target, error)
 //
 //   hyper.MustParseTarget("/contacts")
 func MustParseTarget(rawURL string) Target
+
+// Route constructs a route-based Target from a route name and alternating
+// key-value path parameter pairs.
+// Panics if len(params) is odd.
+//
+//   hyper.Route("contacts.show", "id", "42")
+//   // equivalent to:
+//   // hyper.Target{Route: &hyper.RouteRef{
+//   //     Name: "contacts.show",
+//   //     Params: map[string]string{"id": "42"},
+//   // }}
+//
+//   hyper.Route("contacts.list")
+//   // equivalent to:
+//   // hyper.Target{Route: &hyper.RouteRef{Name: "contacts.list"}}
+func Route(name string, params ...string) Target
 ```
+
+`Route` is the highest-impact convenience constructor — route-based targets
+appear in nearly every handler and require 4+ lines of nested struct
+initialization each time. With zero params (e.g., `Route("contacts.list")`),
+it produces a `Target` with `Route: &RouteRef{Name: "contacts.list"}` and
+an empty `Params` map.
 
 A `WithQuery` method SHALL be provided to return a copy of the `Target` with
 the given query parameters set. This works with both `URL`-based and
@@ -1038,32 +1151,19 @@ separate codec implementations.
 ```go
 rep := hyper.Representation{
     Kind: "contact",
-    Self: &hyper.Target{
-        Route: &hyper.RouteRef{
-            Name: "contacts.show",
-            Params: map[string]string{"id": "42"},
-        },
-    },
-    State: hyper.Object{
-        "id":    hyper.Scalar{V: 42},
-        "name":  hyper.Scalar{V: "Ada"},
-        "email": hyper.Scalar{V: "ada@example.com"},
-        "bio": hyper.RichText{
-            MediaType: "text/markdown",
-            Source:    "Ada Lovelace wrote the first algorithm.",
-        },
-    },
+    Self: hyper.Route("contacts.show", "id", "42").Ptr(),
+    State: hyper.StateFrom(
+        "id", 42,
+        "name", "Ada",
+        "email", "ada@example.com",
+        "bio", hyper.Markdown("Ada Lovelace wrote the first algorithm."),
+    ),
     Actions: []hyper.Action{
         {
-            Name:   "Save",
-            Rel:    "update",
-            Method: "PUT",
-            Target: hyper.Target{
-                Route: &hyper.RouteRef{
-                    Name: "contacts.update",
-                    Params: map[string]string{"id": "42"},
-                },
-            },
+            Name:     "Save",
+            Rel:      "update",
+            Method:   "PUT",
+            Target:   hyper.Route("contacts.update", "id", "42"),
             Consumes: []string{"application/x-www-form-urlencoded"},
             Produces: []string{"text/html", "text/markdown"},
             Fields: []hyper.Field{
@@ -1080,25 +1180,20 @@ rep := hyper.Representation{
 ```go
 rep := hyper.Representation{
     Kind: "contact",
-    State: hyper.Object{
-        "name":  hyper.Scalar{V: "Ada"},
-        "email": hyper.Scalar{V: "ada@example.com"},
-    },
+    State: hyper.StateFrom(
+        "name", "Ada",
+        "email", "ada@example.com",
+    ),
     Embedded: map[string][]hyper.Representation{
         "email_editor": {
             {
                 Kind: "contact-email-editor",
                 Actions: []hyper.Action{
                     {
-                        Name:   "Save Email",
-                        Rel:    "update-email",
-                        Method: "PUT",
-                        Target: hyper.Target{
-                            Route: &hyper.RouteRef{
-                                Name: "contacts.email.update",
-                                Params: map[string]string{"id": "42"},
-                            },
-                        },
+                        Name:     "Save Email",
+                        Rel:      "update-email",
+                        Method:   "PUT",
+                        Target:   hyper.Route("contacts.email.update", "id", "42"),
                         Consumes: []string{"application/x-www-form-urlencoded"},
                         Fields: []hyper.Field{
                             {
@@ -1153,12 +1248,9 @@ func (a *App) NewContact(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        resolved, err := a.Resolver.ResolveTarget(r.Context(), hyper.Target{
-            Route: &hyper.RouteRef{
-                Name: "contacts.show",
-                Params: map[string]string{"id": strconv.FormatInt(contact.ID, 10)},
-            },
-        })
+        resolved, err := a.Resolver.ResolveTarget(r.Context(),
+            hyper.Route("contacts.show", "id", strconv.FormatInt(contact.ID, 10)),
+        )
         if err != nil {
             http.Error(w, "server error", http.StatusInternalServerError)
             return
@@ -1318,7 +1410,7 @@ action := hyper.Action{
     Name:   "Save Email",
     Rel:    "update-email",
     Method: "PUT",
-    Target: hyper.Path("contacts", "42", "email"),
+    Target: hyper.Route("contacts.email.update", "id", "42"),
     Fields: []hyper.Field{
         {Name: "email", Type: "email", Value: "ada@example.com", Required: true},
     },
