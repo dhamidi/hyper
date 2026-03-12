@@ -1762,6 +1762,12 @@ conform to HAL, Siren, or JSON:API. Key differences:
 Implementations that need interoperability with these formats SHOULD provide
 separate codec implementations.
 
+For interoperability with JSON:API clients, the separate `jsonapi` codec
+package (module `github.com/dhamidi/hyper/jsonapi`) provides a
+`RepresentationCodec` and `SubmissionCodec` that map between `hyper`
+representations and the JSON:API wire format. See that package's documentation
+for mapping details and known limitations (e.g., `Action` encoding).
+
 ## 15. Examples
 
 ### 15.1 Representation with an Update Action
