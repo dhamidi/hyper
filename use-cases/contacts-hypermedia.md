@@ -249,6 +249,14 @@ func contactListRepresentation(contacts []Contact, page int, q string) hyper.Rep
                 Rel:    "bulk-delete",
                 Method: "DELETE",
                 Target: hyper.Target{Route: &hyper.RouteRef{Name: "contacts.bulk"}},
+                Fields: []hyper.Field{
+                    {
+                        Name:    "selected_contact_ids",
+                        Type:    "checkbox-group",
+                        Label:   "Selected Contacts",
+                        Options: contactOptions(contacts),
+                    },
+                },
                 Hints: map[string]any{
                     "hx-confirm":  "Are you sure you want to delete these contacts?",
                     "destructive": true,
@@ -260,13 +268,32 @@ func contactListRepresentation(contacts []Contact, page int, q string) hyper.Rep
         },
     }
 
-    // Add pagination link if there are more pages
+    // Add pagination links using IANA-registered rels (§5.3) and RouteRef.Query (§8.1)
+    if page > 1 {
+        rep.Links = append(rep.Links, hyper.Link{
+            Rel: "prev",
+            Target: hyper.Target{Route: &hyper.RouteRef{
+                Name:  "contacts.list",
+                Query: url.Values{"page": {strconv.Itoa(page - 1)}},
+            }},
+            Title: "Previous Page",
+        })
+    }
     if len(contacts) == 100 {
         rep.Links = append(rep.Links, hyper.Link{
-            Rel:    "next",
-            Target: listTarget, // page param added at resolve time
-            Title:  "Next Page",
+            Rel: "next",
+            Target: hyper.Target{Route: &hyper.RouteRef{
+                Name:  "contacts.list",
+                Query: url.Values{"page": {strconv.Itoa(page + 1)}},
+            }},
+            Title: "Next Page",
         })
+    }
+
+    // Add pagination metadata (§4.1)
+    rep.Meta = map[string]any{
+        "current_page": page,
+        "page_size":    100,
     }
 
     return rep
@@ -297,7 +324,7 @@ func handleContactList(w http.ResponseWriter, r *http.Request) {
 
 When the request comes from the htmx search input (`HX-Request: true`), the renderer uses `RenderFragment` mode. The htmlc codec then renders only the `contact-list` component body (the table rows) without the surrounding layout. When it is a full page load (browser navigation), `RenderDocument` mode wraps the component in the layout.
 
-**Spec gap:** The `Renderer.Respond` method (§10.1) does not accept a `RenderMode` parameter. A `RespondWithMode` variant or passing mode through context would be needed. The `EncodeOptions.Mode` field exists (§9.4), but the `Respond` method does not expose it. This is flagged in §13.
+The spec provides `Renderer.RespondWithMode` (§10.1) for exactly this purpose — the handler passes the desired `RenderMode` and the codec receives it via `EncodeOptions.Mode`.
 
 ### 4.3 JSON Wire Format (Full Page)
 
@@ -309,8 +336,13 @@ When the request comes from the htmx search input (`HX-Request: true`), the rend
     "page": 1,
     "query": ""
   },
+  "meta": {
+    "current_page": 1,
+    "page_size": 100
+  },
   "links": [
-    {"rel": "create", "href": "/contacts/new", "title": "Add Contact"}
+    {"rel": "create", "href": "/contacts/new", "title": "Add Contact"},
+    {"rel": "next", "href": "/contacts?page=2", "title": "Next Page"}
   ],
   "actions": [
     {
@@ -335,6 +367,9 @@ When the request comes from the htmx search input (`HX-Request: true`), the rend
       "rel": "bulk-delete",
       "method": "DELETE",
       "href": "/contacts/",
+      "fields": [
+        {"name": "selected_contact_ids", "type": "checkbox-group", "label": "Selected Contacts", "options": ["..."]}
+      ],
       "hints": {
         "hx-confirm": "Are you sure you want to delete these contacts?",
         "destructive": true
@@ -861,7 +896,7 @@ rep := hyper.Representation{
 
 This representation has no `Self`, no `Links`, no `Actions`, no `Embedded`. It exists only to carry a single string. The `Representation` model adds no value here — the response is better served as a raw string.
 
-**Spec gap: trivial fragment responses.** The `hyper` model is designed for responses that carry structured state and hypermedia controls. Micro-endpoints that return a single string (an error message, a count, a status label) do not benefit from the `Representation` wrapper. The spec should acknowledge that not every server endpoint needs to produce a `Representation`, and that raw responses are valid and expected in htmx-heavy applications. This is not a flaw — it is a boundary. The spec models *representations*, and not every HTTP response is one.
+**Note on non-representation responses:** The spec explicitly addresses this in §10.3 — handlers MAY write responses directly to `http.ResponseWriter` without using `Renderer.Respond` for trivial fragments, empty responses, binary content, and redirects. This is the correct boundary: the `hyper` model is for structured representations, and not every HTTP response is one.
 
 ## 10. Pagination
 
@@ -884,7 +919,10 @@ func loadMoreRepresentation(page int) hyper.Representation {
                 Name:   "Load More",
                 Rel:    "load-more",
                 Method: "GET",
-                Target: hyper.Target{Route: &hyper.RouteRef{Name: "contacts.list"}},
+                Target: hyper.Target{Route: &hyper.RouteRef{
+                    Name:  "contacts.list",
+                    Query: url.Values{"page": {strconv.Itoa(page + 1)}},
+                }},
                 Hints: map[string]any{
                     "hx-target": "closest tr",
                     "hx-swap":   "outerHTML",
@@ -1078,9 +1116,11 @@ func archiveRepresentation(a *Archiver) hyper.Representation {
         }
     case "running":
         rep.Meta["poll-interval"] = 1
-        rep.Meta["hx-trigger"] = "load delay:500ms"
-        rep.Meta["hx-target"] = "#archive-progress"
-        rep.Meta["hx-swap"] = "outerHTML"
+        rep.Hints = map[string]any{
+            "hx-trigger": "load delay:500ms",
+            "hx-target":  "#archive-progress",
+            "hx-swap":    "outerHTML",
+        }
         rep.Actions = []hyper.Action{
             {
                 Name:   "Cancel",
@@ -1184,7 +1224,7 @@ func handleArchiveReset(w http.ResponseWriter, r *http.Request) {
 Key observations:
 
 - **`id="archive-progress"`** — the stable ID ensures smooth CSS transitions as htmx swaps the element. This is carried in `Meta` on the representation. The template uses it as the container ID.
-- **`hx-trigger="load delay:500ms"`** — on the "running" state div, this tells htmx to re-fetch the archive status after a 500ms delay every time the element loads. This creates the polling loop.
+- **`hx-trigger="load delay:500ms"`** — on the "running" state div, this tells htmx to re-fetch the archive status after a 500ms delay every time the element loads. This creates the polling loop. These htmx attributes are carried in `Representation.Hints` (not `Meta`).
 - **`hx-boost="false"`** — on the download link, this opts out of htmx's boost behavior so the browser handles the file download natively.
 - **Three-state representation** — the representation's `State.status` drives which actions and links are available. This aligns with the spec's async action conventions (§7.2): the `status` state key and dynamic `Links` (download link appears only when complete).
 
@@ -1206,7 +1246,7 @@ The status values diverge slightly from the spec's recommendations (`waiting` vs
 
 The htmx polling mechanism (`hx-trigger="load delay:500ms"`) is independent of the spec's `Meta["poll-interval"]` convention. The htmx attributes are for the HTML/htmx client; the `Meta["poll-interval"]` is for machine clients (CLI, mobile) that poll by re-fetching the resource.
 
-**Spec gap:** There is a tension between htmx's element-level polling (`hx-trigger="load delay:500ms"`) and the spec's representation-level `Meta["poll-interval"]`. They serve different audiences, but a generic htmlc codec would need to know to render `Meta["hx-trigger"]` as an HTML attribute on the container element. This suggests that `Meta` may be overloaded — it carries both codec-agnostic metadata (`poll-interval`) and codec-specific rendering directives (`hx-trigger`, `hx-target`). The `Hints` map on `Action` has this same dual purpose, but `Meta` on `Representation` is less clearly scoped.
+The spec now provides `Representation.Hints` (§4.1) for exactly this separation. The htmx rendering directives (`hx-trigger`, `hx-target`, `hx-swap`) live in `Hints`, while codec-agnostic metadata (`poll-interval`) remains in `Meta`. This parallels the existing `Action.Hints` pattern and keeps `Meta` focused on application-specific metadata.
 
 ## 13. Spec Feedback
 
@@ -1214,24 +1254,15 @@ This section lists gaps, ambiguities, and suggestions discovered while working t
 
 ### 13.1 RenderMode Not Exposed by Renderer.Respond
 
-**Gap.** The `Renderer.Respond` method (§10.1) does not accept a `RenderMode` parameter. The `EncodeOptions.Mode` field exists (§9.4), but there is no public API to set it. Htmx applications need to toggle between `RenderDocument` and `RenderFragment` on every request based on the `HX-Request` header.
-
-**Suggestion.** Either:
-- Add `Renderer.RespondWithMode(w, r, status, rep, mode)`, or
-- Let `Respond` detect `RenderMode` from the request (e.g., check `HX-Request` header automatically), or
-- Pass `RenderMode` through `context.Context`
-
-The first option is most explicit and avoids hidden behavior.
+**Resolved.** The spec now provides `Renderer.RespondWithMode(w, r, status, rep, mode)` (§10.1). This is the most explicit option — handlers call `RespondWithMode` with `RenderFragment` for htmx partial requests and `RenderDocument` for full page loads. The mode is passed through to the codec via `EncodeOptions.Mode` (§9.4). See §4.2 in this document for the updated usage.
 
 ### 13.2 Trivial Fragment Responses
 
-**Observation.** Several htmx patterns produce responses that are not `hyper.Representation` values: inline email validation returns a raw string, inline delete returns an empty body, file download returns binary data. The spec does not need to model these — they are outside the scope of "representations." But the spec should explicitly acknowledge that not every HTTP response in a `hyper` application is a representation, and that handlers may bypass `Renderer.Respond` for trivial or non-representational responses.
+**Resolved.** The spec now explicitly addresses this in §10.3 (Non-Representation Responses). It acknowledges that handlers MAY write responses directly to `http.ResponseWriter` without using `Renderer.Respond` for trivial fragment responses, empty responses, binary content, and redirects. This is the correct boundary — `Renderer` is for structured `Representation` values, and not every HTTP response is one.
 
 ### 13.3 Meta as Rendering Directive Container
 
-**Ambiguity.** `Representation.Meta` (§6.1) is defined as "application-specific metadata." The archive feature uses `Meta` to carry both codec-agnostic metadata (`poll-interval`) and rendering directives (`hx-trigger`, `hx-target`, `hx-swap`). The rendering directives are analogous to `Action.Hints` but at the representation level rather than the action level.
-
-**Suggestion.** Consider adding a `Hints` field to `Representation` itself (not just `Action`), scoped to representation-level rendering directives. This would parallel `Action.Hints` and keep `Meta` focused on application-specific metadata. Alternatively, clarify that `Meta` is the correct home for representation-level rendering directives.
+**Resolved.** The spec now includes `Representation.Hints` (§4.1) — a `map[string]any` field on `Representation` that parallels `Action.Hints`. Rendering directives (`hx-trigger`, `hx-target`, `hx-swap`) now belong in `Hints`, while `Meta` is scoped to application-specific metadata (e.g., `poll-interval`, pagination totals). The archive feature code in §12.2 has been updated to use `Hints` for htmx attributes.
 
 ### 13.4 Redirect Responses
 
@@ -1239,9 +1270,7 @@ The first option is most explicit and avoids hidden behavior.
 
 ### 13.5 Bulk Operations
 
-**Gap.** The bulk delete feature sends `DELETE /contacts/` with `selected_contact_ids` as form data. In the `hyper` model, this is an `Action` with a single field (`selected_contact_ids`). But the field value is a list of IDs, not a single value. `Field.Type` does not have a vocabulary entry for "list of values" or "multi-select checkboxes."
-
-**Suggestion.** The field type vocabulary (§7.3.1) should include a type for multi-value fields, e.g., `checkbox-group` or `multi-select`. Alternatively, the existing `checkbox` type could be used with `Options`, but the current `Option` model is designed for a single selection, not multiple selections. This is relevant beyond bulk delete — any multi-select or tag-selection UI would benefit from a defined pattern.
+**Resolved.** The spec now defines `checkbox-group` and `multiselect` field types in §7.3.1. These types indicate that the field accepts zero or more values, with multiple `Option` entries having `Selected: true` simultaneously. The bulk delete action in §4.1 now uses `checkbox-group` for the `selected_contact_ids` field. Codecs render `checkbox-group` as a group of checkboxes and `multiselect` as a `<select multiple>` element.
 
 ### 13.6 Action.Hints vs. Template-Authored Attributes
 
@@ -1251,9 +1280,12 @@ The spec should clarify the expected consumption pattern for `Hints` in template
 
 ### 13.7 Pagination Standardization
 
-**Gap.** The spec does not define a pagination convention. The contact list uses `State["page"]` and a `next` link, but there is no standard way for a client to know: (a) how many total items exist, (b) how many pages there are, or (c) what the page size is. The `Meta` map could carry this information, but there is no recommended key vocabulary.
+**Resolved.** The spec now defines recommended pagination conventions in two areas:
 
-**Suggestion.** Define recommended `Meta` keys for pagination: `total_count`, `page_size`, `page_count`, `current_page`. Or define a recommended `State` shape for list representations. This would improve interoperability between generic clients and paginated list endpoints.
+1. **Pagination `Meta` keys** (§4.1): `total_count`, `page_size`, `page_count`, `current_page` — all optional, supporting both offset-based and cursor-based pagination.
+2. **Pagination link relations** (§5.3): IANA-registered `next`, `prev`, `first`, `last` rels per RFC 8288. The absence of a `next` link indicates the last page.
+
+The contact list representation in §4.1 now uses these conventions: `Meta` carries `current_page` and `page_size`, and links use `next`/`prev` rels with `RouteRef.Query` for page parameters.
 
 ### 13.8 Stable Element IDs for htmx Swap Continuity
 
@@ -1275,19 +1307,17 @@ This is acceptable for template-based rendering (the template author knows to wr
 
 ### 13.11 RouteRef Target with Query Parameters
 
-**Gap.** The `RouteRef` model (§8.1) carries `Name` and `Params` (path parameters), but does not support query parameters. Pagination uses `?page=N` as a query parameter, which cannot be expressed through `RouteRef` alone. The handler must construct the URL with query parameters manually or use a `URL`-based target.
-
-**Suggestion.** Add a `Query` field to `RouteRef` (type `url.Values` or `map[string]string`) so that named routes can carry both path and query parameters. This would support pagination links, search result URLs, and filtered list endpoints without falling back to hard-coded URL construction.
+**Resolved.** The `RouteRef` struct (§8.1) now includes a `Query url.Values` field. When both `Params` (path parameters) and `Query` (query parameters) are present, the resolver first resolves the path using `Params`, then appends `Query` as the URL query string. Pagination links in §4.1 and the load-more action in §10.2 now use `RouteRef.Query` to express `?page=N` without manual URL construction.
 
 ### 13.12 Summary of Gaps
 
-| # | Gap | Severity | Section |
-|---|---|---|---|
-| 1 | `Renderer.Respond` does not accept `RenderMode` | High — blocks basic htmx usage | §13.1 |
-| 2 | No acknowledgment of non-representation responses | Low — documentation | §13.2 |
-| 3 | `Meta` overloaded for rendering directives | Medium — design clarity | §13.3 |
-| 4 | Bulk operations / multi-value fields | Medium — missing field type | §13.5 |
-| 5 | Pagination convention | Medium — interoperability | §13.7 |
-| 6 | `RouteRef` lacks query parameter support | Medium — common need | §13.11 |
-| 7 | No `HX-Trigger` response header convention | Low — transport concern | §13.9 |
-| 8 | Form boundary for embedded item fields | Low — template concern | §13.10 |
+| # | Gap | Severity | Section | Status |
+|---|---|---|---|---|
+| 1 | `Renderer.Respond` does not accept `RenderMode` | High — blocks basic htmx usage | §13.1 | **Resolved** — `RespondWithMode` added (§10.1) |
+| 2 | No acknowledgment of non-representation responses | Low — documentation | §13.2 | **Resolved** — §10.3 documents non-representation responses |
+| 3 | `Meta` overloaded for rendering directives | Medium — design clarity | §13.3 | **Resolved** — `Representation.Hints` added (§4.1) |
+| 4 | Bulk operations / multi-value fields | Medium — missing field type | §13.5 | **Resolved** — `checkbox-group` and `multiselect` types added (§7.3.1) |
+| 5 | Pagination convention | Medium — interoperability | §13.7 | **Resolved** — pagination `Meta` keys and IANA link rels defined (§4.1, §5.3) |
+| 6 | `RouteRef` lacks query parameter support | Medium — common need | §13.11 | **Resolved** — `RouteRef.Query` added (§8.1) |
+| 7 | No `HX-Trigger` response header convention | Low — transport concern | §13.9 | Open |
+| 8 | Form boundary for embedded item fields | Low — template concern | §13.10 | Open |
