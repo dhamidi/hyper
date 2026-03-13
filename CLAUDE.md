@@ -25,7 +25,6 @@ See `use-cases/AGENTS.md` for conventions on writing use-case exploration docume
 
 ## Subdirectories
 
-- `htmlc/` — HTML component library
 - `jsonapi/` — JSON:API codec
 - `docs/` — Documentation (explanation, how-to, reference, tutorials)
 - `use-cases/` — Use-case exploration documents
