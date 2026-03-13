@@ -46,6 +46,8 @@ router.Scope(func(admin *dispatch.Scope) {
         posts.POST("schedule",  "/{id}/schedule",  http.HandlerFunc(handleSchedulePost))
         posts.GET("revisions",  "/{id}/revisions", http.HandlerFunc(handlePostRevisions))
         posts.POST("restore",   "/{id}/restore",   http.HandlerFunc(handleRestorePost))
+        posts.POST("bulk",      "/bulk",            http.HandlerFunc(handleBulkPostAction))
+        posts.GET("bulk.show",  "/bulk/{batch_id}", http.HandlerFunc(handleBulkPostResult))
     }, dispatch.WithNamePrefix("posts"), dispatch.WithTemplatePrefix("/posts"))
 
     // Pages — similar to posts but fewer workflow actions
@@ -90,6 +92,7 @@ router.Scope(func(admin *dispatch.Scope) {
         c.POST("trash",   "/{id}/trash",    http.HandlerFunc(handleTrashComment))
         c.POST("reply",   "/{id}/reply",    http.HandlerFunc(handleReplyComment))
         c.DELETE("delete", "/{id}",         http.HandlerFunc(handleDeleteComment))
+        c.POST("bulk",       "/bulk",         http.HandlerFunc(handleCommentBulkAction))
     }, dispatch.WithNamePrefix("comments"), dispatch.WithTemplatePrefix("/comments"))
 
     // Media
@@ -99,6 +102,7 @@ router.Scope(func(admin *dispatch.Scope) {
         m.GET("show",    "/{id}",http.HandlerFunc(handleShowMedia))
         m.POST("update", "/{id}",http.HandlerFunc(handleUpdateMedia))
         m.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteMedia))
+        m.DELETE("bulk",  "/bulk", http.HandlerFunc(handleMediaBulkDelete))
     }, dispatch.WithNamePrefix("media"), dispatch.WithTemplatePrefix("/media"))
 
     // Users — full CRUD with new/edit forms
@@ -1182,7 +1186,7 @@ func postListRepresentation(posts []Post, filters PostFilters, statusCounts map[
                 Name:   "BulkAction",
                 Rel:    "bulk",
                 Method: "POST",
-                Target: hyper.Route("posts.list"),
+                Target: hyper.Route("posts.bulk"),
                 Fields: []hyper.Field{
                     {
                         Name:  "selected_post_ids",
@@ -1293,7 +1297,7 @@ The status filter tabs are navigational links rather than actions — they do no
       "name": "BulkAction",
       "rel": "bulk",
       "method": "POST",
-      "href": "/admin/posts",
+      "href": "/admin/posts/bulk",
       "fields": [
         {"name": "selected_post_ids", "type": "checkbox-group", "label": "Selected Posts"},
         {"name": "action", "type": "select", "label": "Bulk Action", "options": [
@@ -1305,7 +1309,7 @@ The status filter tabs are navigational links rather than actions — they do no
         ]}
       ],
       "hints": {
-        "hx-post": "/admin/posts",
+        "hx-post": "/admin/posts/bulk",
         "hx-target": "#post-table-body",
         "hx-swap": "innerHTML",
         "hx-confirm": "Apply this action to the selected posts?"
@@ -3061,7 +3065,7 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
                 Name:   "BulkAction",
                 Rel:    "bulk",
                 Method: "POST",
-                Target: listTarget,
+                Target: hyper.Route("comments.bulk"),
                 Fields: []hyper.Field{
                     {
                         Name:  "selected_comment_ids",
@@ -3121,7 +3125,6 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
 
 ```go
 func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
-    currentUser := contextUser(r)
     action := r.FormValue("action")
     commentIDs := r.Form["selected_comment_ids"]
 
@@ -3130,43 +3133,37 @@ func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    var results []ItemResult
     for _, idStr := range commentIDs {
         id, err := strconv.Atoi(idStr)
         if err != nil {
             continue
         }
 
+        var opErr error
         switch action {
         case "approve":
-            store.UpdateCommentStatus(id, ModerationApproved)
+            opErr = store.UpdateCommentStatus(id, ModerationApproved)
         case "spam":
-            store.UpdateCommentStatus(id, ModerationSpam)
+            opErr = store.UpdateCommentStatus(id, ModerationSpam)
         case "trash":
-            store.UpdateCommentStatus(id, ModerationTrashed)
+            opErr = store.UpdateCommentStatus(id, ModerationTrashed)
         case "delete":
-            store.DeleteComment(id)
+            opErr = store.DeleteComment(id)
+        }
+
+        if opErr != nil {
+            results = append(results, ItemResult{ID: id, Status: "error", Error: opErr.Error()})
+        } else {
+            results = append(results, ItemResult{ID: id, Status: "success"})
         }
     }
 
-    // Re-render the comment list
-    status := r.URL.Query().Get("status")
-    page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-    if page < 1 {
-        page = 1
-    }
+    // Return a bulk-action-result representation with per-item results
+    batchID := generateBatchID()
+    rep := bulkActionResultRepresentation(batchID, action, results, hyper.Route("comments.list"))
 
-    comments := store.ListComments(status, page, 20)
-    statusCounts := store.CommentStatusCounts()
-
-    rep := commentListRepresentation(comments, statusCounts, page)
-
-    // Filter actions by role within embedded comments
-    for i := range rep.Embedded["items"] {
-        rep.Embedded["items"][i].Actions = filterActionsByRole(string(currentUser.Role), rep.Embedded["items"][i].Actions)
-    }
-    rep.Actions = filterActionsByRole(string(currentUser.Role), rep.Actions)
-
-    renderer.RespondWithMode(w, r, http.StatusOK, rep, renderMode(r))
+    render(w, r, rep, http.StatusOK)
 }
 ```
 
@@ -3200,7 +3197,7 @@ func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
       "name": "BulkAction",
       "rel": "bulk",
       "method": "POST",
-      "href": "/admin/comments",
+      "href": "/admin/comments/bulk",
       "fields": [
         {"name": "selected_comment_ids", "type": "checkbox-group", "label": "Selected Comments"},
         {"name": "action", "type": "select", "label": "Bulk Action", "options": [
@@ -3211,7 +3208,7 @@ func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
           {"value": "delete", "label": "Delete Permanently"}
         ]}
       ],
-      "hints": {"hx-post": "/admin/comments", "hx-target": "#comment-list-body", "hx-swap": "innerHTML", "hx-confirm": "Apply this action to the selected comments?"}
+      "hints": {"hx-post": "/admin/comments/bulk", "hx-target": "#comment-list-body", "hx-swap": "innerHTML", "hx-confirm": "Apply this action to the selected comments?"}
     },
     {
       "name": "Search",
@@ -3401,7 +3398,7 @@ func mediaListRepresentation(items []Media, viewMode string) hyper.Representatio
                 Name:   "BulkDelete",
                 Rel:    "bulk-delete",
                 Method: "DELETE",
-                Target: listTarget,
+                Target: hyper.Route("media.bulk"),
                 Fields: []hyper.Field{
                     {
                         Name:  "selected_media_ids",
@@ -3639,11 +3636,11 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
       "name": "BulkDelete",
       "rel": "bulk-delete",
       "method": "DELETE",
-      "href": "/admin/media",
+      "href": "/admin/media/bulk",
       "fields": [
         {"name": "selected_media_ids", "type": "checkbox-group", "label": "Selected Media"}
       ],
-      "hints": {"hx-delete": "/admin/media", "hx-target": "#media-grid", "hx-swap": "innerHTML", "hx-confirm": "Delete selected media files? This cannot be undone.", "destructive": true}
+      "hints": {"hx-delete": "/admin/media/bulk", "hx-target": "#media-grid", "hx-swap": "innerHTML", "hx-confirm": "Delete selected media files? This cannot be undone.", "destructive": true}
     },
     {
       "name": "Search",
@@ -5041,20 +5038,13 @@ func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Track per-item results for Meta reporting
-    results := make([]map[string]any, 0, len(input.SelectedPostIDs))
-    successCount := 0
-    failureCount := 0
+    // Track per-item results
+    var results []ItemResult
 
     for _, postID := range input.SelectedPostIDs {
         post, err := postStore.Get(postID)
         if err != nil {
-            results = append(results, map[string]any{
-                "post_id": postID,
-                "status":  "error",
-                "message": "Post not found",
-            })
-            failureCount++
+            results = append(results, ItemResult{ID: postID, Status: "error", Error: "Post not found"})
             continue
         }
 
@@ -5062,12 +5052,7 @@ func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
         switch input.Action {
         case "publish":
             if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, map[string]any{
-                    "post_id": postID,
-                    "status":  "error",
-                    "message": "Insufficient permissions to publish",
-                })
-                failureCount++
+                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to publish"})
                 continue
             }
             post.Status = PostStatusPublished
@@ -5082,12 +5067,7 @@ func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
 
         case "trash":
             if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, map[string]any{
-                    "post_id": postID,
-                    "status":  "error",
-                    "message": "Insufficient permissions to trash",
-                })
-                failureCount++
+                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to trash"})
                 continue
             }
             post.Status = PostStatusTrashed
@@ -5095,46 +5075,22 @@ func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
 
         case "delete":
             if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, map[string]any{
-                    "post_id": postID,
-                    "status":  "error",
-                    "message": "Insufficient permissions to delete",
-                })
-                failureCount++
+                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to delete"})
                 continue
             }
             opErr = postStore.Delete(postID)
         }
 
         if opErr != nil {
-            results = append(results, map[string]any{
-                "post_id": postID,
-                "status":  "error",
-                "message": opErr.Error(),
-            })
-            failureCount++
+            results = append(results, ItemResult{ID: postID, Status: "error", Error: opErr.Error()})
         } else {
-            results = append(results, map[string]any{
-                "post_id": postID,
-                "status":  "success",
-            })
-            successCount++
+            results = append(results, ItemResult{ID: postID, Status: "success"})
         }
     }
 
-    // Re-fetch the post list and render the refreshed representation
-    filters := PostFilters{Status: r.URL.Query().Get("status")}
-    posts, _ := postStore.List(filters, 1)
-    statusCounts, _ := postStore.StatusCounts()
-
-    rep := postListRepresentation(posts, filters, statusCounts, 1)
-    rep.Meta["bulk_result"] = map[string]any{
-        "action":        input.Action,
-        "success_count": successCount,
-        "failure_count": failureCount,
-        "results":       results,
-    }
-    rep.Actions = filterActionsByRole(string(currentUser.Role), rep.Actions)
+    // Generate a batch ID and return a bulk-action-result representation
+    batchID := generateBatchID()
+    rep := bulkActionResultRepresentation(batchID, input.Action, results, hyper.Route("posts.list"))
 
     render(w, r, rep, http.StatusOK)
 }
@@ -5146,106 +5102,143 @@ The bulk action flow works as follows:
 
 1. **User selects posts** — Each post row has a checkbox. The `htmlc` template renders these as `<input type="checkbox" name="selected_post_ids" value="42">` based on the `BulkAction` action's `checkbox-group` field.
 
-2. **User chooses action and submits** — The `select` field presents the bulk action options. The form POSTs to `posts.list`.
+2. **User chooses action and submits** — The `select` field presents the bulk action options. The form POSTs to `/admin/posts/bulk` (the `posts.bulk` route).
 
-3. **Server processes each post** — The handler iterates over selected IDs, applying the action and tracking per-item results.
+3. **Server processes each post** — The handler iterates over selected IDs, applying the action and collecting per-item `ItemResult` values.
 
-4. **Server returns refreshed list** — The response is a full `post-list` representation with updated status counts and `Meta["bulk_result"]` containing the operation summary.
+4. **Server returns a `bulk-action-result` representation** — Instead of a refreshed post-list, the response is a first-class `bulk-action-result` with per-item results as embedded `bulk-action-item` representations and a `"collection"` link back to the post list.
+
+For htmx clients: the `bulk-action-result.vue` component renders a summary banner. The client can follow the `"collection"` link to refresh the post list, or the component can use `hx-get` with the collection URL to auto-refresh the list below the banner.
 
 #### JSON Wire Format — Bulk Trash Request
 
 ```json
-POST /admin/posts HTTP/1.1
+POST /admin/posts/bulk HTTP/1.1
 Content-Type: application/x-www-form-urlencoded
 
-selected_post_ids=42&selected_post_ids=55&selected_post_ids=78&action=trash
+selected_post_ids=42&selected_post_ids=55&selected_post_ids=99&action=trash
 ```
 
-#### JSON Wire Format — Refreshed Post List After Bulk Trash
+#### JSON Wire Format — Bulk Action Result
 
 ```json
 {
-  "kind": "post-list",
-  "self": {"href": "/admin/posts"},
+  "kind": "bulk-action-result",
+  "self": {"href": "/admin/posts/bulk/abc123"},
   "state": {
-    "status_filter": "",
-    "query": "",
-    "category_filter": "",
-    "author_filter": ""
-  },
-  "meta": {
-    "total_count": 139,
-    "current_page": 1,
-    "page_size": 20,
-    "status_counts": {
-      "published": 95,
-      "draft": 31,
-      "scheduled": 8,
-      "trashed": 8
-    },
-    "bulk_result": {
-      "action": "trash",
-      "success_count": 3,
-      "failure_count": 0,
-      "results": [
-        {"post_id": 42, "status": "success"},
-        {"post_id": 55, "status": "success"},
-        {"post_id": 78, "status": "success"}
-      ]
-    }
+    "batch_id": "abc123",
+    "action": "trash",
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1
   },
   "links": [
-    {"rel": "nav", "href": "/admin/posts", "title": "All"},
-    {"rel": "nav", "href": "/admin/posts?status=published", "title": "Published"},
-    {"rel": "nav", "href": "/admin/posts?status=draft", "title": "Draft"},
-    {"rel": "nav", "href": "/admin/posts?status=scheduled", "title": "Scheduled"},
-    {"rel": "nav", "href": "/admin/posts?status=trashed", "title": "Trashed"},
-    {"rel": "create", "href": "/admin/posts/new", "title": "Add New Post"}
-  ],
-  "actions": [
-    {
-      "name": "Search",
-      "rel": "search",
-      "method": "GET",
-      "href": "/admin/posts",
-      "fields": [
-        {"name": "q", "type": "text", "label": "Search Posts"},
-        {"name": "status", "type": "select", "label": "Status", "options": [
-          {"value": "", "label": "All Statuses"},
-          {"value": "published", "label": "Published"},
-          {"value": "draft", "label": "Draft"},
-          {"value": "scheduled", "label": "Scheduled"},
-          {"value": "trashed", "label": "Trashed"}
-        ]}
-      ]
-    },
-    {
-      "name": "BulkAction",
-      "rel": "bulk",
-      "method": "POST",
-      "href": "/admin/posts",
-      "fields": [
-        {"name": "selected_post_ids", "type": "checkbox-group", "label": "Selected Posts"},
-        {"name": "action", "type": "select", "label": "Bulk Action", "options": [
-          {"value": "", "label": "\u2014 Bulk Actions \u2014"},
-          {"value": "publish", "label": "Publish"},
-          {"value": "draft", "label": "Move to Draft"},
-          {"value": "trash", "label": "Move to Trash"},
-          {"value": "delete", "label": "Delete Permanently"}
-        ]}
-      ]
-    }
+    {"rel": "collection", "href": "/admin/posts", "title": "Back to list"}
   ],
   "embedded": {
     "items": [
-      {"kind": "post-row", "self": {"href": "/admin/posts/1"}, "state": {"id": 1, "title": "Welcome to the Blog", "status": "published"}},
-      {"kind": "post-row", "self": {"href": "/admin/posts/3"}, "state": {"id": 3, "title": "Draft Post Ideas", "status": "draft"}}
+      {"kind": "bulk-action-item", "state": {"id": 42, "status": "success"}},
+      {"kind": "bulk-action-item", "state": {"id": 55, "status": "success"}},
+      {"kind": "bulk-action-item", "state": {"id": 99, "status": "error", "message": "Post not found"}}
     ]
   }
 }
 ```
 
-The `bulk_result` in `Meta` provides per-item success/failure reporting. The `htmlc` template can render a toast notification: "3 posts moved to trash." If some items fail, it can show "2 of 3 posts moved to trash. 1 failed: Post not found." The spec has no convention for bulk result reporting (see §16.7), so `Meta` serves as the extension point.
+The `bulk-action-result` representation is self-describing — generic clients can interpret `kind: "bulk-action-result"` without application-specific knowledge. The `"collection"` link provides a standard way to navigate back to the post list. Per-item results are embedded as `bulk-action-item` representations, making them navigable and inspectable. See §13.3 for the full representation definition.
+
+### 13.3 Bulk Action Result Representation
+
+The `bulk-action-result` representation kind models the outcome of a bulk operation as a first-class resource. This eliminates the need for ad-hoc `Meta` conventions and makes bulk results self-describing, navigable, cacheable, and consistent with the rest of the `hyper` representation model.
+
+```go
+func bulkActionResultRepresentation(
+    batchID string,
+    action string,
+    results []ItemResult,
+    resourceListTarget hyper.Target,
+) hyper.Representation {
+    succeeded := 0
+    failed := 0
+    itemReps := make([]hyper.Representation, len(results))
+    for i, r := range results {
+        if r.Error == "" {
+            succeeded++
+        } else {
+            failed++
+        }
+        state := hyper.Object{
+            "id":     hyper.Scalar{V: r.ID},
+            "status": hyper.Scalar{V: r.Status},
+        }
+        if r.Error != "" {
+            state["message"] = hyper.Scalar{V: r.Error}
+        }
+        itemReps[i] = hyper.Representation{
+            Kind:  "bulk-action-item",
+            State: state,
+        }
+    }
+
+    return hyper.Representation{
+        Kind: "bulk-action-result",
+        Self: hyper.Route("posts.bulk.show", "batch_id", batchID).Ptr(),
+        State: hyper.Object{
+            "batch_id":  hyper.Scalar{V: batchID},
+            "action":    hyper.Scalar{V: action},
+            "total":     hyper.Scalar{V: len(results)},
+            "succeeded": hyper.Scalar{V: succeeded},
+            "failed":    hyper.Scalar{V: failed},
+        },
+        Links: []hyper.Link{
+            {Rel: "collection", Target: resourceListTarget, Title: "Back to list"},
+        },
+        Embedded: map[string][]hyper.Representation{
+            "items": itemReps,
+        },
+    }
+}
+
+type ItemResult struct {
+    ID     int
+    Status string // "success" or "error"
+    Error  string
+}
+```
+
+#### JSON Wire Format — Bulk Action Result
+
+```json
+{
+  "kind": "bulk-action-result",
+  "self": {"href": "/admin/posts/bulk/abc123"},
+  "state": {
+    "batch_id": "abc123",
+    "action": "trash",
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1
+  },
+  "links": [
+    {"rel": "collection", "href": "/admin/posts", "title": "Back to list"}
+  ],
+  "embedded": {
+    "items": [
+      {"kind": "bulk-action-item", "state": {"id": 42, "status": "success"}},
+      {"kind": "bulk-action-item", "state": {"id": 55, "status": "success"}},
+      {"kind": "bulk-action-item", "state": {"id": 99, "status": "error", "message": "Post not found"}}
+    ]
+  }
+}
+```
+
+Key properties of the `bulk-action-result` kind:
+
+- **Self-describing**: Generic clients can interpret `kind: "bulk-action-result"` without application-specific knowledge of `Meta` keys.
+- **Navigable**: The `"collection"` link provides a standard way to return to the parent list. Per-item results could include `Self` links to individual resources.
+- **Consistent**: Uses the same `Representation` model as everything else — no special `Meta` convention needed.
+- **Extensible**: The `bulk-action-result` kind can carry `Actions` (e.g., "Undo" or "Retry failed items") without overloading `Meta`.
+- **Cacheable/Retrievable**: With a `Self` URL (`/admin/posts/bulk/{batch_id}`), the result can be retrieved later via `posts.bulk.show` — useful for async bulk operations.
 
 ## 14. Trash and Restore (Interaction 13)
 
@@ -6040,28 +6033,17 @@ The spec has no native concept of action chaining or confirmation-with-input. Th
 
 ### 16.7 Bulk Action Result Reporting
 
-**Gap.** After bulk operations (§13.1), the server needs to report per-item success/failure. This document uses `Meta["bulk_result"]` to carry a summary and per-item results, but there is no spec convention for this.
+**Resolved — bulk actions modelled as resources.** The original gap identified that `Meta["bulk_result"]` was opaque to generic clients and required application-specific knowledge to interpret.
 
-A client receiving a bulk action response does not know to look in `Meta["bulk_result"]` unless it has application-specific knowledge. A standard convention would let generic clients display bulk operation summaries.
+The resolution: bulk actions are now modelled as first-class resources. A bulk operation returns a `bulk-action-result` representation (§13.3) with its own `Kind`, `Self`, `State`, `Embedded` items (per-item results), and `Links` (back to the collection). This eliminates the need for any `Meta` convention:
 
-**Suggestion:** Define a non-normative `Meta` convention for bulk results:
+- **Self-describing**: Generic clients interpret `kind: "bulk-action-result"` without application-specific knowledge.
+- **Navigable**: The `"collection"` link provides a standard way to return to the parent list.
+- **Consistent**: Uses the same `Representation` model as everything else.
+- **Extensible**: The `bulk-action-result` kind can carry `Actions` (e.g., "Undo" or "Retry failed items").
+- **Cacheable/Retrievable**: With a `Self` URL, the result can be retrieved later (useful for async bulk operations).
 
-```json
-"meta": {
-  "bulk_result": {
-    "action": "trash",
-    "total": 5,
-    "succeeded": 4,
-    "failed": 1,
-    "items": [
-      {"id": "42", "status": "success"},
-      {"id": "99", "status": "error", "message": "Post not found"}
-    ]
-  }
-}
-```
-
-This could be documented as a recommended pattern without being normative. **Severity: Medium** — bulk operations are common in admin interfaces and the lack of convention means every application invents its own reporting structure.
+Dedicated bulk routes (`posts.bulk`, `comments.bulk`, `media.bulk`) receive the bulk action submissions, and `posts.bulk.show` serves as the retrieval endpoint for stored results. See §13.1–§13.3 for the full implementation.
 
 ### 16.8 Content Negotiation for Uploads
 
@@ -6137,7 +6119,7 @@ This would be non-normative guidance for codec implementors. **Severity: Low** �
 | 16.4 | Multi-Step Workflows / State Machines — no graph declaration | Low | §7 Action | Open — informational only |
 | 16.5 | Hierarchical Select Options — no nested Options | Medium | §10.2 Option | Open |
 | 16.6 | Confirmation Dialogs with Additional Input — no action chaining | Medium | §7 Action | Open — document pattern |
-| 16.7 | Bulk Action Result Reporting — no Meta convention | Medium | §12 Meta | Open |
+| 16.7 | Bulk Action Result Reporting — no Meta convention | Medium | §13 Bulk Operations | Resolved — bulk actions modelled as resources |
 | 16.8 | Content Negotiation for Uploads — Consumes/Field interplay | Low | §7.3 Consumes | Open — documentation only |
 | 16.9 | Cross-Resource References in Forms — no resource-picker type | Low | §10.1 Field | Open |
 | 16.10 | Settings as Non-Collection Resources — no singleton pattern | Low | §4 Representation | Open — documentation only |
