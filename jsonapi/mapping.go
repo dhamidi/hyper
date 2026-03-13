@@ -555,6 +555,15 @@ func mapFields(fields []hyper.Field) []map[string]any {
 			}
 			field["options"] = opts
 		}
+		if f.Accept != "" {
+			field["accept"] = f.Accept
+		}
+		if f.MaxSize > 0 {
+			field["maxSize"] = f.MaxSize
+		}
+		if f.Multiple {
+			field["multiple"] = true
+		}
 		result[i] = field
 	}
 	return result

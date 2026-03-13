@@ -370,6 +370,76 @@ func TestJSONCodec_FieldOptions(t *testing.T) {
 	}
 }
 
+func TestJSONCodec_FileFieldConstraints(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:     "upload",
+				Method:   "POST",
+				Consumes: []string{"multipart/form-data"},
+				Fields: []Field{
+					{
+						Name:     "file",
+						Type:     "file",
+						Required: true,
+						Label:    "Upload File",
+						Accept:   "image/*",
+						MaxSize:  10485760, // 10 MB
+						Multiple: true,
+					},
+				},
+			},
+		},
+	}
+
+	result := encodeToMap(t, rep)
+	actions := result["actions"].([]any)
+	action := actions[0].(map[string]any)
+	fields := action["fields"].([]any)
+	field := fields[0].(map[string]any)
+
+	if field["accept"] != "image/*" {
+		t.Errorf("accept = %v, want image/*", field["accept"])
+	}
+	if field["maxSize"] != float64(10485760) {
+		t.Errorf("maxSize = %v, want 10485760", field["maxSize"])
+	}
+	if field["multiple"] != true {
+		t.Errorf("multiple = %v, want true", field["multiple"])
+	}
+}
+
+func TestJSONCodec_FileFieldConstraints_OmittedWhenZero(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "upload",
+				Method: "POST",
+				Fields: []Field{
+					{
+						Name: "file",
+						Type: "file",
+					},
+				},
+			},
+		},
+	}
+
+	result := encodeToMap(t, rep)
+	action := result["actions"].([]any)[0].(map[string]any)
+	field := action["fields"].([]any)[0].(map[string]any)
+
+	if _, ok := field["accept"]; ok {
+		t.Error("accept should be omitted when empty")
+	}
+	if _, ok := field["maxSize"]; ok {
+		t.Error("maxSize should be omitted when zero")
+	}
+	if _, ok := field["multiple"]; ok {
+		t.Error("multiple should be omitted when false")
+	}
+}
+
 func TestJSONSubmissionCodec_MediaTypes(t *testing.T) {
 	codec := JSONSubmissionCodec()
 	types := codec.MediaTypes()

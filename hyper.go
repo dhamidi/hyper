@@ -87,6 +87,9 @@ type Field struct {
 	Help     string   // Help text
 	Options  []Option // Enumerated choices
 	Error    string   // Validation error message
+	Accept   string   // Accepted MIME types (file fields), e.g. "image/*" or "image/jpeg,image/png"
+	MaxSize  int64    // Maximum file size in bytes (file fields), 0 means no limit
+	Multiple bool     // Whether the field accepts multiple files (file fields)
 }
 
 // Option represents an enumerated choice for a Field.

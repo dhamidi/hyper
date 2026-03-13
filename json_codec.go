@@ -257,6 +257,15 @@ func encodeFields(fields []Field) []map[string]any {
 		if f.Error != "" {
 			m["error"] = f.Error
 		}
+		if f.Accept != "" {
+			m["accept"] = f.Accept
+		}
+		if f.MaxSize > 0 {
+			m["maxSize"] = f.MaxSize
+		}
+		if f.Multiple {
+			m["multiple"] = true
+		}
 		out[i] = m
 	}
 	return out

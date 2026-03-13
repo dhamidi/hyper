@@ -452,6 +452,46 @@ func TestDecodeResponse_CustomDecoderByContentType(t *testing.T) {
 	}
 }
 
+func TestDecodeField_FileFieldConstraints(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"actions": [{
+				"name": "upload",
+				"method": "POST",
+				"fields": [{
+					"name": "file",
+					"type": "file",
+					"required": true,
+					"accept": "image/*",
+					"maxSize": 10485760,
+					"multiple": true
+				}]
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Representation.Actions) != 1 {
+		t.Fatalf("actions = %d, want 1", len(resp.Representation.Actions))
+	}
+	f := resp.Representation.Actions[0].Fields[0]
+	if f.Accept != "image/*" {
+		t.Errorf("Accept = %q, want image/*", f.Accept)
+	}
+	if f.MaxSize != 10485760 {
+		t.Errorf("MaxSize = %d, want 10485760", f.MaxSize)
+	}
+	if !f.Multiple {
+		t.Error("Multiple = false, want true")
+	}
+}
+
 // mockCredentialStore is a simple in-memory credential store for testing.
 type mockCredentialStore struct {
 	cred Credential

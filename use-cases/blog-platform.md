@@ -614,7 +614,7 @@ var userFields = []hyper.Field{
 }
 
 var mediaUploadFields = []hyper.Field{
-    {Name: "file", Type: "file", Label: "File", Required: true},
+    {Name: "file", Type: "file", Label: "File", Required: true, Accept: "image/*,application/pdf", MaxSize: 10485760},
     {Name: "alt_text", Type: "text", Label: "Alt Text"},
     {Name: "caption", Type: "textarea", Label: "Caption"},
     {Name: "description", Type: "textarea", Label: "Description"},
@@ -6133,7 +6133,7 @@ This would be non-normative guidance for codec implementors. **Severity: Low** �
 |---|-------------------|----------|---------|--------|
 | 16.1 | Recursive Embedded Representations — no depth limit guidance | Low | §4.3 Embedded | Open |
 | 16.2 | Conditional Action Visibility — no declarative mechanism | Low | §7 Action | Open — workaround is idiomatic |
-| 16.3 | File Upload Fields — no `Accept`/`MaxSize` on Field | Medium | §10.1 Field | Open |
+| 16.3 | File Upload Fields — no `Accept`/`MaxSize` on Field | Medium | §10.1 Field | Resolved — added `Accept`, `MaxSize`, `Multiple` fields to `Field` struct |
 | 16.4 | Multi-Step Workflows / State Machines — no graph declaration | Low | §7 Action | Open — informational only |
 | 16.5 | Hierarchical Select Options — no nested Options | Medium | §10.2 Option | Open |
 | 16.6 | Confirmation Dialogs with Additional Input — no action chaining | Medium | §7 Action | Open — document pattern |

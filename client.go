@@ -667,6 +667,15 @@ func decodeField(m map[string]any) Field {
 	if e, ok := m["error"].(string); ok {
 		f.Error = e
 	}
+	if a, ok := m["accept"].(string); ok {
+		f.Accept = a
+	}
+	if ms, ok := m["maxSize"].(float64); ok {
+		f.MaxSize = int64(ms)
+	}
+	if mul, ok := m["multiple"].(bool); ok {
+		f.Multiple = mul
+	}
 	return f
 }
 
