@@ -1580,7 +1580,7 @@ func postDetailRepresentation(post Post, author User, categories []Category, tag
         "id", post.ID,
         "title", post.Title,
         "slug", post.Slug,
-        "content", hyper.RichText{MediaType: "text/markdown", Source: post.Content},
+        "content", hyper.Markdown(post.Content),
         "excerpt", post.Excerpt,
         "status", string(post.Status),
         "author_id", post.AuthorID,
@@ -2069,10 +2069,10 @@ func revisionListRepresentation(postID int, revisions []Revision) hyper.Represen
                 "author_id", rev.AuthorID,
                 "created_at", rev.CreatedAt.Format(time.RFC3339),
                 "title", rev.Title,
-                "content", hyper.RichText{MediaType: "text/markdown", Source: rev.Content},
+                "content", hyper.Markdown(rev.Content),
             ),
             Links: []hyper.Link{
-                {Rel: "author", Target: hyper.Route("users.show", "id", strconv.Itoa(rev.AuthorID))},
+                hyper.NewLink("author", hyper.Route("users.show", "id", strconv.Itoa(rev.AuthorID))),
             },
             Actions: []hyper.Action{
                 {
@@ -2229,7 +2229,7 @@ func pageDetailRepresentation(page Page, author User, parentPage *Page, childPag
         "id", page.ID,
         "title", page.Title,
         "slug", page.Slug,
-        "content", hyper.RichText{MediaType: "text/markdown", Source: page.Content},
+        "content", hyper.Markdown(page.Content),
         "status", string(page.Status),
         "template", page.Template,
         "menu_order", page.MenuOrder,
@@ -2414,10 +2414,7 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
             Title:  fmt.Sprintf("Posts in %s", c.Name),
         })
         if c.ParentID != nil {
-            catLinks = append(catLinks, hyper.Link{
-                Rel:    "parent",
-                Target: hyper.Route("categories.show", "id", strconv.Itoa(*c.ParentID)),
-            })
+            catLinks = append(catLinks, hyper.NewLink("parent", hyper.Route("categories.show", "id", strconv.Itoa(*c.ParentID))))
         }
 
         items[i] = hyper.Representation{
