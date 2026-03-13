@@ -2462,14 +2462,19 @@ func contactHandler(eng *htmlc.Engine, w http.ResponseWriter, r *http.Request) {
 fields across multiple templates?**
 
 The `representationToScope` function (§16.5) surfaces actions, links, and
-fields in a structured format. Reusable `htmlc` components can consume
-this structure directly, eliminating the need to manually construct buttons,
-forms, and inputs in every template.
+fields in a structured, template-friendly format. Any component-capable
+template engine can consume this structure to build reusable UI components
+that eliminate manual construction of buttons, forms, and inputs in every
+template. `hyper` itself does not ship or require any particular template
+engine or component library.
 
-This section defines three components: `<action>` renders a single action
-as the appropriate HTML element, `<field>` renders a single field as the
+This section illustrates the pattern with three example components written
+in `htmlc` / Vue SFC syntax: `<action>` renders a single action as the
+appropriate HTML element, `<field>` renders a single field as the
 appropriate input, and `<actions>` enumerates all non-hidden actions for a
-representation.
+representation. The same pattern applies to any template engine that
+supports composition — Go `html/template` with partials, `templ`, or
+custom rendering code.
 
 #### 16.6.1 The `<action>` Component
 
@@ -2712,17 +2717,19 @@ spreads attributes that the server has placed in `Action.Hints`. This
 keeps the component generic and ensures that the server remains the
 authority on interaction behavior.
 
-#### 16.6.6 Built-in vs. Library
+#### 16.6.6 Shipping Components
 
-The `<action>`, `<field>`, and `<actions>` components MAY be shipped as
-part of `htmlc` (as built-in components available to all templates) or as
-a separate component library that applications opt into. Built-in
-components benefit from tighter integration (e.g., automatic registration),
-while a separate library allows applications to provide custom
-implementations.
+The `<action>`, `<field>`, and `<actions>` components shown above are
+illustrative — they are not part of `hyper` or `htmlc`. Applications
+that use a component-capable template engine can define these components
+at the project level (e.g., as `.vue` files in the project's component
+directory) or package them as a shared component library.
 
-A conforming `htmlc` implementation SHOULD provide these components or
-document how applications can register their own equivalents.
+Many applications will not need generic components at all. Custom
+templates that hard-code the markup for each representation kind are
+simpler and provide full control over layout and behavior. The generic
+components are most valuable for admin interfaces, prototyping, and
+applications that render many similar CRUD views.
 
 ### 16.7 CLI Client Hints
 
