@@ -26,105 +26,117 @@ The `dispatch` router defines all routes with names for reverse URL generation. 
 ```go
 router := dispatch.New()
 
+// Wrap the router with method override middleware so HTML forms
+// can submit PUT and DELETE via a hidden _method field.
+handler := methodoverride.Wrap(router)
+
 // All admin routes share the /admin prefix
 router.Scope(func(admin *dispatch.Scope) {
 
     // Dashboard
     admin.GET("dashboard", "/", http.HandlerFunc(handleDashboard))
 
-    // Posts — CRUD plus workflow actions
+    // Posts — CRUD via Resource helper plus workflow actions
     admin.Scope(func(posts *dispatch.Scope) {
-        posts.GET("list",       "/",            http.HandlerFunc(handlePostList))
+        // Standard CRUD via Resource helper
+        dispatch.Resource(posts, "posts", PostHandler{})
+        // Registers: posts.index (GET /), posts.create (POST /),
+        //            posts.show (GET /{id}), posts.update (PUT /{id}),
+        //            posts.destroy (DELETE /{id})
+
+        // Additional form routes
         posts.GET("new",        "/new",         http.HandlerFunc(handleNewPost))
-        posts.POST("create",    "/",            http.HandlerFunc(handleCreatePost))
-        posts.GET("show",       "/{id}",        http.HandlerFunc(handleShowPost))
         posts.GET("edit",       "/{id}/edit",   http.HandlerFunc(handleEditPost))
-        posts.POST("update",    "/{id}",        http.HandlerFunc(handleUpdatePost))
-        posts.POST("trash",     "/{id}/trash",  http.HandlerFunc(handleTrashPost))
+
+        // Workflow actions
         posts.POST("publish",   "/{id}/publish",http.HandlerFunc(handlePublishPost))
         posts.POST("unpublish", "/{id}/unpublish", http.HandlerFunc(handleUnpublishPost))
         posts.POST("schedule",  "/{id}/schedule",  http.HandlerFunc(handleSchedulePost))
-        posts.GET("revisions",  "/{id}/revisions", http.HandlerFunc(handlePostRevisions))
+        posts.POST("trash",     "/{id}/trash",  http.HandlerFunc(handleTrashPost))
         posts.POST("restore",   "/{id}/restore",   http.HandlerFunc(handleRestorePost))
+        posts.GET("revisions",  "/{id}/revisions", http.HandlerFunc(handlePostRevisions))
         posts.POST("bulk",      "/bulk",            http.HandlerFunc(handleBulkPostAction))
         posts.GET("bulk.show",  "/bulk/{batch_id}", http.HandlerFunc(handleBulkPostResult))
     }, dispatch.WithNamePrefix("posts"), dispatch.WithTemplatePrefix("/posts"))
 
-    // Pages — similar to posts but fewer workflow actions
+    // Pages — CRUD via Resource helper plus workflow actions
     admin.Scope(func(pages *dispatch.Scope) {
-        pages.GET("list",    "/",            http.HandlerFunc(handlePageList))
+        // Standard CRUD via Resource helper
+        dispatch.Resource(pages, "pages", PageHandler{})
+
+        // Additional form routes
         pages.GET("new",     "/new",         http.HandlerFunc(handleNewPage))
-        pages.POST("create", "/",            http.HandlerFunc(handleCreatePage))
-        pages.GET("show",    "/{id}",        http.HandlerFunc(handleShowPage))
         pages.GET("edit",    "/{id}/edit",   http.HandlerFunc(handleEditPage))
-        pages.POST("update", "/{id}",        http.HandlerFunc(handleUpdatePage))
+
+        // Workflow actions
         pages.POST("trash",  "/{id}/trash",  http.HandlerFunc(handleTrashPage))
         pages.POST("publish","/{id}/publish",http.HandlerFunc(handlePublishPage))
     }, dispatch.WithNamePrefix("pages"), dispatch.WithTemplatePrefix("/pages"))
 
     // Categories — standard CRUD via Resource helper
     admin.Scope(func(s *dispatch.Scope) {
-        // Note: Resource registers <name>.index, .show, .create, .destroy, etc.
-        // We only need index, show, create, update (via PUT), and destroy.
-        // Resource uses PUT for update; the blog uses POST — register manually.
-        s.GET("list",      "/",    http.HandlerFunc(handleCategoryList))
-        s.POST("create",   "/",    http.HandlerFunc(handleCreateCategory))
-        s.GET("show",      "/{id}",http.HandlerFunc(handleShowCategory))
-        s.POST("update",   "/{id}",http.HandlerFunc(handleUpdateCategory))
-        s.DELETE("delete",  "/{id}",http.HandlerFunc(handleDeleteCategory))
+        dispatch.Resource(s, "categories", CategoryHandler{})
+        // Registers: categories.index (GET /), categories.create (POST /),
+        //            categories.show (GET /{id}), categories.update (PUT /{id}),
+        //            categories.destroy (DELETE /{id})
     }, dispatch.WithNamePrefix("categories"), dispatch.WithTemplatePrefix("/categories"))
 
-    // Tags — same shape as categories
+    // Tags — standard CRUD via Resource helper
     admin.Scope(func(s *dispatch.Scope) {
-        s.GET("list",    "/",    http.HandlerFunc(handleTagList))
-        s.POST("create", "/",    http.HandlerFunc(handleCreateTag))
-        s.GET("show",    "/{id}",http.HandlerFunc(handleShowTag))
-        s.POST("update", "/{id}",http.HandlerFunc(handleUpdateTag))
-        s.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteTag))
+        dispatch.Resource(s, "tags", TagHandler{})
+        // Registers: tags.index (GET /), tags.create (POST /),
+        //            tags.show (GET /{id}), tags.update (PUT /{id}),
+        //            tags.destroy (DELETE /{id})
     }, dispatch.WithNamePrefix("tags"), dispatch.WithTemplatePrefix("/tags"))
 
-    // Comments — moderation actions on top of basic listing
+    // Comments — CRUD base via Resource helper plus moderation actions
     admin.Scope(func(c *dispatch.Scope) {
-        c.GET("list",     "/",              http.HandlerFunc(handleCommentList))
-        c.GET("show",     "/{id}",          http.HandlerFunc(handleShowComment))
+        dispatch.Resource(c, "comments", CommentHandler{})
+        // Registers: comments.index (GET /), comments.create (POST /),
+        //            comments.show (GET /{id}), comments.update (PUT /{id}),
+        //            comments.destroy (DELETE /{id})
+
+        // Moderation workflow actions
         c.POST("approve", "/{id}/approve",  http.HandlerFunc(handleApproveComment))
         c.POST("spam",    "/{id}/spam",     http.HandlerFunc(handleSpamComment))
         c.POST("trash",   "/{id}/trash",    http.HandlerFunc(handleTrashComment))
         c.POST("reply",   "/{id}/reply",    http.HandlerFunc(handleReplyComment))
-        c.DELETE("delete", "/{id}",         http.HandlerFunc(handleDeleteComment))
-        c.POST("bulk",       "/bulk",         http.HandlerFunc(handleCommentBulkAction))
+        c.POST("bulk",    "/bulk",          http.HandlerFunc(handleCommentBulkAction))
     }, dispatch.WithNamePrefix("comments"), dispatch.WithTemplatePrefix("/comments"))
 
-    // Media
+    // Media — standard CRUD via Resource helper plus bulk delete
     admin.Scope(func(m *dispatch.Scope) {
-        m.GET("list",    "/",    http.HandlerFunc(handleMediaList))
-        m.POST("upload", "/",    http.HandlerFunc(handleMediaUpload))
-        m.GET("show",    "/{id}",http.HandlerFunc(handleShowMedia))
-        m.POST("update", "/{id}",http.HandlerFunc(handleUpdateMedia))
-        m.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteMedia))
-        m.DELETE("bulk",  "/bulk", http.HandlerFunc(handleMediaBulkDelete))
+        dispatch.Resource(m, "media", MediaHandler{})
+        // Registers: media.index (GET /), media.create (POST /),
+        //            media.show (GET /{id}), media.update (PUT /{id}),
+        //            media.destroy (DELETE /{id})
+
+        // Additional actions
+        m.DELETE("bulk", "/bulk", http.HandlerFunc(handleMediaBulkDelete))
     }, dispatch.WithNamePrefix("media"), dispatch.WithTemplatePrefix("/media"))
 
-    // Users — full CRUD with new/edit forms
+    // Users — standard CRUD via Resource helper
     admin.Scope(func(u *dispatch.Scope) {
-        u.GET("list",    "/",          http.HandlerFunc(handleUserList))
-        u.GET("new",     "/new",       http.HandlerFunc(handleNewUser))
-        u.POST("create", "/",          http.HandlerFunc(handleCreateUser))
-        u.GET("show",    "/{id}",      http.HandlerFunc(handleShowUser))
-        u.GET("edit",    "/{id}/edit", http.HandlerFunc(handleEditUser))
-        u.POST("update", "/{id}",      http.HandlerFunc(handleUpdateUser))
-        u.DELETE("delete","/{id}",      http.HandlerFunc(handleDeleteUser))
+        dispatch.Resource(u, "users", UserHandler{})
+        // Registers: users.index (GET /), users.create (POST /),
+        //            users.show (GET /{id}), users.update (PUT /{id}),
+        //            users.destroy (DELETE /{id})
+
+        // Additional form routes
+        u.GET("new",  "/new",       http.HandlerFunc(handleNewUser))
+        u.GET("edit", "/{id}/edit", http.HandlerFunc(handleEditUser))
     }, dispatch.WithNamePrefix("users"), dispatch.WithTemplatePrefix("/users"))
 
-    // Menus — nested items sub-resource
+    // Menus — standard CRUD via Resource helper plus nested items sub-resource
     admin.Scope(func(m *dispatch.Scope) {
-        m.GET("list",    "/",    http.HandlerFunc(handleMenuList))
-        m.POST("create", "/",    http.HandlerFunc(handleCreateMenu))
-        m.GET("show",    "/{id}",http.HandlerFunc(handleShowMenu))
-        m.POST("update", "/{id}",http.HandlerFunc(handleUpdateMenu))
-        m.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteMenu))
+        dispatch.Resource(m, "menus", MenuHandler{})
+        // Registers: menus.index (GET /), menus.create (POST /),
+        //            menus.show (GET /{id}), menus.update (PUT /{id}),
+        //            menus.destroy (DELETE /{id})
+
+        // Nested items sub-resource
         m.POST("items.add",    "/{id}/items",                    http.HandlerFunc(handleAddMenuItem))
-        m.POST("items.update", "/{menu_id}/items/{item_id}",     http.HandlerFunc(handleUpdateMenuItem))
+        m.PUT("items.update",  "/{menu_id}/items/{item_id}",     http.HandlerFunc(handleUpdateMenuItem))
         m.DELETE("items.delete","/{menu_id}/items/{item_id}",     http.HandlerFunc(handleDeleteMenuItem))
         m.POST("reorder",      "/{id}/reorder",                  http.HandlerFunc(handleReorderMenu))
     }, dispatch.WithNamePrefix("menus"), dispatch.WithTemplatePrefix("/menus"))
@@ -149,9 +161,12 @@ router.Scope(func(admin *dispatch.Scope) {
     }, dispatch.WithNamePrefix("revisions"), dispatch.WithTemplatePrefix("/revisions"))
 
 }, dispatch.WithTemplatePrefix("/admin"))
+
+// Use handler (with method override) as the http.Handler for the server
+http.ListenAndServe(":8080", handler)
 ```
 
-**Note on `dispatch.Resource`:** Several resource groups above (categories, tags, media, users) follow standard CRUD patterns that could use `dispatch.Resource()`. However, the blog uses `POST` for updates rather than `PUT`/`PATCH`, and several resources have non-standard actions (e.g., comment moderation, post workflow transitions). Using explicit `Scope` registration keeps the route table readable and avoids mismatches with `Resource`'s Rails-style conventions (which use `PUT`/`PATCH` for updates and name the delete route `destroy`).
+**Note on `dispatch.Resource`:** Standard CRUD resource groups (categories, tags, media, users, menus) use `dispatch.Resource()` for index/show/create/update/destroy routes. The `methodoverride` middleware translates the hidden `_method=PUT` and `_method=DELETE` form fields into proper HTTP methods before dispatch routing, so HTML forms can trigger PUT and DELETE handlers. Resources with additional workflow actions (posts, pages, comments) use Resource for the CRUD base and add extra routes via Scope.
 
 ### 2.2 DispatchResolver
 
@@ -1406,6 +1421,7 @@ func postFormRepresentation(post *Post, categories []Category, tags []Tag, error
     if post != nil {
         // Edit mode — pre-fill values and set update target
         actionName = "UpdatePost"
+        method = "PUT"
         target = hyper.Route("posts.update", "id", strconv.Itoa(post.ID))
         title = "Edit Post"
         selfTarget := hyper.Route("posts.edit", "id", strconv.Itoa(post.ID))
@@ -1435,6 +1451,28 @@ func postFormRepresentation(post *Post, categories []Category, tags []Tag, error
         fields = hyper.WithErrors(fields, map[string]any{}, errors)
     }
 
+    // For update actions (PUT), prepend the _method hidden field
+    var actionFields []hyper.Field
+    if method == "PUT" {
+        actionFields = append([]hyper.Field{
+            {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+        }, fields...)
+    } else {
+        actionFields = fields
+    }
+
+    // htmx can send PUT directly — use hx-put for updates, hx-post for creates
+    hints := map[string]any{
+        "hx-target":   "#main-content",
+        "hx-swap":     "innerHTML",
+        "hx-push-url": "true",
+    }
+    if method == "PUT" {
+        hints["hx-put"] = ""
+    } else {
+        hints["hx-post"] = ""
+    }
+
     rep := hyper.Representation{
         Kind: kind,
         Self: self,
@@ -1447,13 +1485,8 @@ func postFormRepresentation(post *Post, categories []Category, tags []Tag, error
                 Rel:    "save",
                 Method: method,
                 Target: target,
-                Fields: fields,
-                Hints: map[string]any{
-                    "hx-post":     "",
-                    "hx-target":   "#main-content",
-                    "hx-swap":     "innerHTML",
-                    "hx-push-url": "true",
-                },
+                Fields: actionFields,
+                Hints:  hints,
             },
         },
         Hints: map[string]any{
@@ -2536,23 +2569,30 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
             Actions: []hyper.Action{
                 {
                     Name:   "UpdateCategory",
-                    Method: "POST",
+                    Rel:    "update",
+                    Method: "PUT",
                     Target: hyper.Route("categories.update", "id", cid),
-                    Fields: hyper.WithValues(categoryFields, map[string]any{
+                    Fields: append([]hyper.Field{
+                        {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+                    }, hyper.WithValues(categoryFields, map[string]any{
                         "name":        c.Name,
                         "slug":        c.Slug,
                         "description": c.Description,
-                    }),
+                    })...),
                     Hints: map[string]any{
-                        "hx-post":   "",
+                        "hx-put":    "",
                         "hx-target": "closest tr",
                         "hx-swap":   "outerHTML",
                     },
                 },
                 {
                     Name:   "DeleteCategory",
+                    Rel:    "destroy",
                     Method: "DELETE",
-                    Target: hyper.Route("categories.delete", "id", cid),
+                    Target: hyper.Route("categories.destroy", "id", cid),
+                    Fields: []hyper.Field{
+                        {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                    },
                     Hints: map[string]any{
                         "hx-delete":  "",
                         "hx-target":  "closest tr",
@@ -2604,8 +2644,9 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
                 Name:   "BulkDelete",
                 Rel:    "bulk-delete",
                 Method: "DELETE",
-                Target: hyper.Route("categories.list"),
+                Target: hyper.Route("categories.index"),
                 Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
                     {
                         Name:  "selected_category_ids",
                         Type:  "checkbox-group",
@@ -2666,6 +2707,7 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
       "method": "DELETE",
       "href": "/admin/categories",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"},
         {"name": "selected_category_ids", "type": "checkbox-group", "label": "Selected Categories"}
       ],
       "hints": {"hx-delete": "/admin/categories", "hx-target": "#category-table-body", "hx-swap": "innerHTML", "hx-confirm": "Delete selected categories? Posts will be uncategorized.", "destructive": true}
@@ -2684,20 +2726,24 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
         "actions": [
           {
             "name": "UpdateCategory",
-            "method": "POST",
+            "method": "PUT",
             "href": "/admin/categories/1",
             "fields": [
+              {"name": "_method", "type": "hidden", "value": "PUT"},
               {"name": "name", "type": "text", "label": "Name", "required": true, "value": "Tutorials"},
               {"name": "slug", "type": "text", "label": "Slug", "value": "tutorials"},
               {"name": "description", "type": "textarea", "label": "Description", "value": "Step-by-step guides"},
               {"name": "parent_id", "type": "select", "label": "Parent Category"}
             ],
-            "hints": {"hx-post": "/admin/categories/1", "hx-target": "closest tr", "hx-swap": "outerHTML"}
+            "hints": {"hx-put": "/admin/categories/1", "hx-target": "closest tr", "hx-swap": "outerHTML"}
           },
           {
             "name": "DeleteCategory",
             "method": "DELETE",
             "href": "/admin/categories/1",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/categories/1", "hx-target": "closest tr", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete category \"Tutorials\"? Posts will be uncategorized.", "destructive": true}
           }
         ]
@@ -2714,20 +2760,24 @@ func categoryListRepresentation(categories []Category) hyper.Representation {
         "actions": [
           {
             "name": "UpdateCategory",
-            "method": "POST",
+            "method": "PUT",
             "href": "/admin/categories/4",
             "fields": [
+              {"name": "_method", "type": "hidden", "value": "PUT"},
               {"name": "name", "type": "text", "label": "Name", "required": true, "value": "Go Basics"},
               {"name": "slug", "type": "text", "label": "Slug", "value": "go-basics"},
               {"name": "description", "type": "textarea", "label": "Description", "value": "Beginner-level Go content"},
               {"name": "parent_id", "type": "select", "label": "Parent Category"}
             ],
-            "hints": {"hx-post": "/admin/categories/4", "hx-target": "closest tr", "hx-swap": "outerHTML"}
+            "hints": {"hx-put": "/admin/categories/4", "hx-target": "closest tr", "hx-swap": "outerHTML"}
           },
           {
             "name": "DeleteCategory",
             "method": "DELETE",
             "href": "/admin/categories/4",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/categories/4", "hx-target": "closest tr", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete category \"Go Basics\"? Posts will be uncategorized.", "destructive": true}
           }
         ]
@@ -2764,23 +2814,30 @@ func tagListRepresentation(tags []Tag) hyper.Representation {
             Actions: []hyper.Action{
                 {
                     Name:   "UpdateTag",
-                    Method: "POST",
+                    Rel:    "update",
+                    Method: "PUT",
                     Target: hyper.Route("tags.update", "id", tid),
-                    Fields: hyper.WithValues(tagFields, map[string]any{
+                    Fields: append([]hyper.Field{
+                        {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+                    }, hyper.WithValues(tagFields, map[string]any{
                         "name":        t.Name,
                         "slug":        t.Slug,
                         "description": t.Description,
-                    }),
+                    })...),
                     Hints: map[string]any{
-                        "hx-post":   "",
+                        "hx-put":    "",
                         "hx-target": "closest tr",
                         "hx-swap":   "outerHTML",
                     },
                 },
                 {
                     Name:   "DeleteTag",
+                    Rel:    "destroy",
                     Method: "DELETE",
-                    Target: hyper.Route("tags.delete", "id", tid),
+                    Target: hyper.Route("tags.destroy", "id", tid),
+                    Fields: []hyper.Field{
+                        {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                    },
                     Hints: map[string]any{
                         "hx-delete":  "",
                         "hx-target":  "closest tr",
@@ -2857,19 +2914,23 @@ func tagListRepresentation(tags []Tag) hyper.Representation {
         "actions": [
           {
             "name": "UpdateTag",
-            "method": "POST",
+            "method": "PUT",
             "href": "/admin/tags/5",
             "fields": [
+              {"name": "_method", "type": "hidden", "value": "PUT"},
               {"name": "name", "type": "text", "label": "Name", "required": true, "value": "golang"},
               {"name": "slug", "type": "text", "label": "Slug", "value": "golang"},
               {"name": "description", "type": "textarea", "label": "Description", "value": "Go programming language"}
             ],
-            "hints": {"hx-post": "/admin/tags/5", "hx-target": "closest tr", "hx-swap": "outerHTML"}
+            "hints": {"hx-put": "/admin/tags/5", "hx-target": "closest tr", "hx-swap": "outerHTML"}
           },
           {
             "name": "DeleteTag",
             "method": "DELETE",
             "href": "/admin/tags/5",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/tags/5", "hx-target": "closest tr", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete tag \"golang\"?", "destructive": true}
           }
         ]
@@ -2885,19 +2946,23 @@ func tagListRepresentation(tags []Tag) hyper.Representation {
         "actions": [
           {
             "name": "UpdateTag",
-            "method": "POST",
+            "method": "PUT",
             "href": "/admin/tags/12",
             "fields": [
+              {"name": "_method", "type": "hidden", "value": "PUT"},
               {"name": "name", "type": "text", "label": "Name", "required": true, "value": "interfaces"},
               {"name": "slug", "type": "text", "label": "Slug", "value": "interfaces"},
               {"name": "description", "type": "textarea", "label": "Description"}
             ],
-            "hints": {"hx-post": "/admin/tags/12", "hx-target": "closest tr", "hx-swap": "outerHTML"}
+            "hints": {"hx-put": "/admin/tags/12", "hx-target": "closest tr", "hx-swap": "outerHTML"}
           },
           {
             "name": "DeleteTag",
             "method": "DELETE",
             "href": "/admin/tags/12",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/tags/12", "hx-target": "closest tr", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete tag \"interfaces\"?", "destructive": true}
           }
         ]
@@ -3052,7 +3117,10 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
             commentActions = append(commentActions, hyper.Action{
                 Name:   "PermanentDelete",
                 Method: "DELETE",
-                Target: hyper.Route("comments.delete", "id", cid),
+                Target: hyper.Route("comments.destroy", "id", cid),
+                Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                },
                 Hints: map[string]any{
                     "hx-delete":  "",
                     "hx-target":  "closest .comment-item",
@@ -3377,7 +3445,10 @@ func mediaListRepresentation(items []Media, viewMode string) hyper.Representatio
                 {
                     Name:   "DeleteMedia",
                     Method: "DELETE",
-                    Target: hyper.Route("media.delete", "id", mid),
+                    Target: hyper.Route("media.destroy", "id", mid),
+                    Fields: []hyper.Field{
+                        {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                    },
                     Hints: map[string]any{
                         "hx-delete":  "",
                         "hx-target":  "closest .media-card",
@@ -3419,6 +3490,7 @@ func mediaListRepresentation(items []Media, viewMode string) hyper.Representatio
                 Method: "DELETE",
                 Target: hyper.Route("media.bulk"),
                 Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
                     {
                         Name:  "selected_media_ids",
                         Type:  "checkbox-group",
@@ -3498,15 +3570,17 @@ func mediaDetailRepresentation(m Media) hyper.Representation {
             {
                 Name:   "UpdateMetadata",
                 Rel:    "edit",
-                Method: "POST",
+                Method: "PUT",
                 Target: hyper.Route("media.update", "id", mid),
-                Fields: hyper.WithValues(mediaEditFields, map[string]any{
+                Fields: append([]hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+                }, hyper.WithValues(mediaEditFields, map[string]any{
                     "alt_text":    m.AltText,
                     "caption":     m.Caption,
                     "description": m.Description,
-                }),
+                })...),
                 Hints: map[string]any{
-                    "hx-post":   "",
+                    "hx-put":    "",
                     "hx-target": "#media-detail",
                     "hx-swap":   "outerHTML",
                 },
@@ -3514,7 +3588,10 @@ func mediaDetailRepresentation(m Media) hyper.Representation {
             {
                 Name:   "DeleteMedia",
                 Method: "DELETE",
-                Target: hyper.Route("media.delete", "id", mid),
+                Target: hyper.Route("media.destroy", "id", mid),
+                Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                },
                 Hints: map[string]any{
                     "hx-delete":  "",
                     "hx-target":  "#main-content",
@@ -3657,6 +3734,7 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
       "method": "DELETE",
       "href": "/admin/media/bulk",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"},
         {"name": "selected_media_ids", "type": "checkbox-group", "label": "Selected Media"}
       ],
       "hints": {"hx-delete": "/admin/media/bulk", "hx-target": "#media-grid", "hx-swap": "innerHTML", "hx-confirm": "Delete selected media files? This cannot be undone.", "destructive": true}
@@ -3698,6 +3776,9 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
             "name": "DeleteMedia",
             "method": "DELETE",
             "href": "/admin/media/201",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/media/201", "hx-target": "closest .media-card", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete \"hero-image.jpg\"? This cannot be undone.", "destructive": true}
           }
         ]
@@ -3726,6 +3807,9 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
             "name": "DeleteMedia",
             "method": "DELETE",
             "href": "/admin/media/202",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/media/202", "hx-target": "closest .media-card", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete \"go-logo.png\"? This cannot be undone.", "destructive": true}
           }
         ]
@@ -3754,6 +3838,9 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
             "name": "DeleteMedia",
             "method": "DELETE",
             "href": "/admin/media/203",
+            "fields": [
+              {"name": "_method", "type": "hidden", "value": "DELETE"}
+            ],
             "hints": {"hx-delete": "/admin/media/203", "hx-target": "closest .media-card", "hx-swap": "outerHTML swap:1s", "hx-confirm": "Delete \"architecture-diagram.pdf\"? This cannot be undone.", "destructive": true}
           }
         ]
@@ -3799,19 +3886,23 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
     {
       "name": "UpdateMetadata",
       "rel": "edit",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/media/201",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "alt_text", "type": "text", "label": "Alt Text", "value": "Blog hero image"},
         {"name": "caption", "type": "textarea", "label": "Caption", "value": "The main hero image for the blog homepage"},
         {"name": "description", "type": "textarea", "label": "Description", "value": "A wide-angle photograph of a mountain landscape used as the default hero image."}
       ],
-      "hints": {"hx-post": "/admin/media/201", "hx-target": "#media-detail", "hx-swap": "outerHTML"}
+      "hints": {"hx-put": "/admin/media/201", "hx-target": "#media-detail", "hx-swap": "outerHTML"}
     },
     {
       "name": "DeleteMedia",
       "method": "DELETE",
       "href": "/admin/media/201",
+      "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"}
+      ],
       "hints": {"hx-delete": "/admin/media/201", "hx-target": "#main-content", "hx-swap": "innerHTML", "hx-confirm": "Delete \"hero-image.jpg\"? This cannot be undone.", "confirm": "Delete \"hero-image.jpg\"? This cannot be undone.", "destructive": true}
     },
     {
@@ -3852,9 +3943,10 @@ func menuItemRepresentation(item MenuItem, menuID int) hyper.Representation {
             {
                 Name:   "UpdateMenuItem",
                 Rel:    "edit",
-                Method: "POST",
+                Method: "PUT",
                 Target: hyper.Route("menus.items.update", "menu_id", menuIDStr, "item_id", itemIDStr),
                 Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
                     {Name: "label", Type: "text", Label: "Navigation Label", Required: true, Value: item.Label},
                     {Name: "url", Type: "text", Label: "URL", Value: item.URL},
                     {Name: "target", Type: "select", Label: "Open In", Options: []hyper.Option{
@@ -3863,7 +3955,7 @@ func menuItemRepresentation(item MenuItem, menuID int) hyper.Representation {
                     }},
                 },
                 Hints: map[string]any{
-                    "hx-post":   "",
+                    "hx-put":    "",
                     "hx-target": "#menu-builder",
                     "hx-swap":   "outerHTML",
                 },
@@ -3872,6 +3964,9 @@ func menuItemRepresentation(item MenuItem, menuID int) hyper.Representation {
                 Name:   "RemoveMenuItem",
                 Method: "DELETE",
                 Target: hyper.Route("menus.items.delete", "menu_id", menuIDStr, "item_id", itemIDStr),
+                Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                },
                 Hints: map[string]any{
                     "hx-delete":  "",
                     "hx-target":  "#menu-builder",
@@ -3986,9 +4081,10 @@ func menuDetailRepresentation(menu Menu) hyper.Representation {
             {
                 Name:   "AssignLocation",
                 Rel:    "assign",
-                Method: "POST",
+                Method: "PUT",
                 Target: hyper.Route("menus.update", "id", menuIDStr),
                 Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
                     {Name: "location", Type: "select", Label: "Theme Location", Required: true, Options: []hyper.Option{
                         {Value: "primary", Label: "Primary Navigation", Selected: menu.Location == "primary"},
                         {Value: "footer", Label: "Footer Menu", Selected: menu.Location == "footer"},
@@ -3996,7 +4092,7 @@ func menuDetailRepresentation(menu Menu) hyper.Representation {
                     }},
                 },
                 Hints: map[string]any{
-                    "hx-post":   "",
+                    "hx-put":    "",
                     "hx-target": "#menu-detail-header",
                     "hx-swap":   "outerHTML",
                 },
@@ -4004,7 +4100,10 @@ func menuDetailRepresentation(menu Menu) hyper.Representation {
             {
                 Name:   "DeleteMenu",
                 Method: "DELETE",
-                Target: hyper.Route("menus.delete", "id", menuIDStr),
+                Target: hyper.Route("menus.destroy", "id", menuIDStr),
+                Fields: []hyper.Field{
+                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+                },
                 Hints: map[string]any{
                     "hx-delete":  "",
                     "hx-target":  "#main-content",
@@ -4073,21 +4172,25 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
     {
       "name": "AssignLocation",
       "rel": "assign",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/menus/1",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "location", "type": "select", "label": "Theme Location", "required": true, "options": [
           {"value": "primary", "label": "Primary Navigation", "selected": true},
           {"value": "footer", "label": "Footer Menu"},
           {"value": "sidebar", "label": "Sidebar Menu"}
         ]}
       ],
-      "hints": {"hx-post": "/admin/menus/1", "hx-target": "#menu-detail-header", "hx-swap": "outerHTML"}
+      "hints": {"hx-put": "/admin/menus/1", "hx-target": "#menu-detail-header", "hx-swap": "outerHTML"}
     },
     {
       "name": "DeleteMenu",
       "method": "DELETE",
       "href": "/admin/menus/1",
+      "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"}
+      ],
       "hints": {"hx-delete": "/admin/menus/1", "hx-target": "#main-content", "hx-swap": "innerHTML", "hx-confirm": "Delete menu \"Main Navigation\"? All menu items will be removed.", "destructive": true}
     }
   ],
@@ -4098,7 +4201,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
         "self": {"href": "/admin/menus/1/items/10"},
         "state": {"id": 10, "label": "Home", "url": "/", "type": "custom", "target": "_self", "position": 1},
         "actions": [
-          {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/10", "fields": [
+          {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/10", "fields": [
+            {"name": "_method", "type": "hidden", "value": "PUT"},
             {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "Home"},
             {"name": "url", "type": "text", "label": "URL", "value": "/"},
             {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4106,7 +4210,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
               {"value": "_blank", "label": "New Tab"}
             ]}
           ]},
-          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/10", "hints": {"hx-delete": "/admin/menus/1/items/10", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Home\" from the menu?", "destructive": true}}
+          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/10", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/10", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Home\" from the menu?", "destructive": true}}
         ]
       },
       {
@@ -4114,7 +4218,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
         "self": {"href": "/admin/menus/1/items/11"},
         "state": {"id": 11, "label": "Blog", "url": "/blog", "type": "page", "target": "_self", "position": 2},
         "actions": [
-          {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/11", "fields": [
+          {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/11", "fields": [
+            {"name": "_method", "type": "hidden", "value": "PUT"},
             {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "Blog"},
             {"name": "url", "type": "text", "label": "URL", "value": "/blog"},
             {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4122,7 +4227,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
               {"value": "_blank", "label": "New Tab"}
             ]}
           ]},
-          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/11", "hints": {"hx-delete": "/admin/menus/1/items/11", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Blog\" from the menu?", "destructive": true}}
+          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/11", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/11", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Blog\" from the menu?", "destructive": true}}
         ],
         "embedded": {
           "children": [
@@ -4131,7 +4236,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
               "self": {"href": "/admin/menus/1/items/20"},
               "state": {"id": 20, "label": "Tutorials", "url": "/category/tutorials", "type": "category", "target": "_self", "position": 1},
               "actions": [
-                {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/20", "fields": [
+                {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/20", "fields": [
+                  {"name": "_method", "type": "hidden", "value": "PUT"},
                   {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "Tutorials"},
                   {"name": "url", "type": "text", "label": "URL", "value": "/category/tutorials"},
                   {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4139,7 +4245,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
                     {"value": "_blank", "label": "New Tab"}
                   ]}
                 ]},
-                {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/20", "hints": {"hx-delete": "/admin/menus/1/items/20", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Tutorials\" from the menu?", "destructive": true}}
+                {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/20", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/20", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Tutorials\" from the menu?", "destructive": true}}
               ],
               "embedded": {
                 "children": [
@@ -4148,7 +4254,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
                     "self": {"href": "/admin/menus/1/items/30"},
                     "state": {"id": 30, "label": "Getting Started", "url": "/getting-started-with-go", "type": "post", "target": "_self", "position": 1},
                     "actions": [
-                      {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/30", "fields": [
+                      {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/30", "fields": [
+                        {"name": "_method", "type": "hidden", "value": "PUT"},
                         {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "Getting Started"},
                         {"name": "url", "type": "text", "label": "URL", "value": "/getting-started-with-go"},
                         {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4156,7 +4263,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
                           {"value": "_blank", "label": "New Tab"}
                         ]}
                       ]},
-                      {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/30", "hints": {"hx-delete": "/admin/menus/1/items/30", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Getting Started\" from the menu?", "destructive": true}}
+                      {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/30", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/30", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"Getting Started\" from the menu?", "destructive": true}}
                     ]
                   }
                 ]
@@ -4167,7 +4274,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
               "self": {"href": "/admin/menus/1/items/21"},
               "state": {"id": 21, "label": "News", "url": "/category/news", "type": "category", "target": "_self", "position": 2},
               "actions": [
-                {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/21", "fields": [
+                {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/21", "fields": [
+                  {"name": "_method", "type": "hidden", "value": "PUT"},
                   {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "News"},
                   {"name": "url", "type": "text", "label": "URL", "value": "/category/news"},
                   {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4175,7 +4283,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
                     {"value": "_blank", "label": "New Tab"}
                   ]}
                 ]},
-                {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/21", "hints": {"hx-delete": "/admin/menus/1/items/21", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"News\" from the menu?", "destructive": true}}
+                {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/21", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/21", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"News\" from the menu?", "destructive": true}}
               ]
             }
           ]
@@ -4186,7 +4294,8 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
         "self": {"href": "/admin/menus/1/items/12"},
         "state": {"id": 12, "label": "About", "url": "/about", "type": "page", "target": "_self", "position": 3},
         "actions": [
-          {"name": "UpdateMenuItem", "rel": "edit", "method": "POST", "href": "/admin/menus/1/items/12", "fields": [
+          {"name": "UpdateMenuItem", "rel": "edit", "method": "PUT", "href": "/admin/menus/1/items/12", "fields": [
+            {"name": "_method", "type": "hidden", "value": "PUT"},
             {"name": "label", "type": "text", "label": "Navigation Label", "required": true, "value": "About"},
             {"name": "url", "type": "text", "label": "URL", "value": "/about"},
             {"name": "target", "type": "select", "label": "Open In", "options": [
@@ -4194,7 +4303,7 @@ The `ReorderMenu` action uses a hidden `ordered_item_ids` field. The client-side
               {"value": "_blank", "label": "New Tab"}
             ]}
           ]},
-          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/12", "hints": {"hx-delete": "/admin/menus/1/items/12", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"About\" from the menu?", "destructive": true}}
+          {"name": "RemoveMenuItem", "method": "DELETE", "href": "/admin/menus/1/items/12", "fields": [{"name": "_method", "type": "hidden", "value": "DELETE"}], "hints": {"hx-delete": "/admin/menus/1/items/12", "hx-target": "#menu-builder", "hx-swap": "outerHTML", "hx-confirm": "Remove \"About\" from the menu?", "destructive": true}}
         ]
       }
     ]
@@ -4433,16 +4542,18 @@ func userDetailRepresentation(user User, currentUserRole string) hyper.Represent
     actions = append(actions, hyper.Action{
         Name:   "UpdateUser",
         Rel:    "edit",
-        Method: "POST",
+        Method: "PUT",
         Target: hyper.Route("users.update", "id", userIDStr),
-        Fields: hyper.WithValues(userFields, map[string]any{
+        Fields: append([]hyper.Field{
+            {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+        }, hyper.WithValues(userFields, map[string]any{
             "username":     user.Username,
             "email":        user.Email,
             "display_name": user.DisplayName,
             "bio":          user.Bio,
-        }),
+        })...),
         Hints: map[string]any{
-            "hx-post":   "",
+            "hx-put":    "",
             "hx-target": "#user-detail",
             "hx-swap":   "outerHTML",
         },
@@ -4460,13 +4571,14 @@ func userDetailRepresentation(user User, currentUserRole string) hyper.Represent
         actions = append(actions, hyper.Action{
             Name:   "ChangeRole",
             Rel:    "change-role",
-            Method: "POST",
+            Method: "PUT",
             Target: hyper.Route("users.update", "id", userIDStr),
             Fields: []hyper.Field{
+                {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
                 {Name: "role", Type: "select", Label: "Role", Options: roleOptions, Required: true},
             },
             Hints: map[string]any{
-                "hx-post":    "",
+                "hx-put":     "",
                 "hx-target":  "#user-detail",
                 "hx-swap":    "outerHTML",
                 "hx-confirm": fmt.Sprintf("Change %s's role?", user.DisplayName),
@@ -4479,14 +4591,15 @@ func userDetailRepresentation(user User, currentUserRole string) hyper.Represent
         actions = append(actions, hyper.Action{
             Name:   "ResetPassword",
             Rel:    "reset-password",
-            Method: "POST",
+            Method: "PUT",
             Target: hyper.Route("users.update", "id", userIDStr),
             Fields: []hyper.Field{
+                {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
                 {Name: "new_password", Type: "password", Label: "New Password", Required: true},
                 {Name: "confirm_password", Type: "password", Label: "Confirm Password", Required: true},
             },
             Hints: map[string]any{
-                "hx-post":   "",
+                "hx-put":    "",
                 "hx-target": "#user-detail",
                 "hx-swap":   "outerHTML",
             },
@@ -4498,7 +4611,10 @@ func userDetailRepresentation(user User, currentUserRole string) hyper.Represent
         actions = append(actions, hyper.Action{
             Name:   "DeleteUser",
             Method: "DELETE",
-            Target: hyper.Route("users.delete", "id", userIDStr),
+            Target: hyper.Route("users.destroy", "id", userIDStr),
+            Fields: []hyper.Field{
+                {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
+            },
             Hints: map[string]any{
                 "hx-delete":  "",
                 "hx-target":  "#main-content",
@@ -4549,9 +4665,10 @@ The role-based action visibility is handled entirely in the Go builder function.
     {
       "name": "UpdateUser",
       "rel": "edit",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/users/5",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "username", "type": "text", "label": "Username", "required": true, "value": "jdoe"},
         {"name": "email", "type": "email", "label": "Email", "required": true, "value": "jdoe@example.com"},
         {"name": "display_name", "type": "text", "label": "Display Name", "value": "Jane Doe"},
@@ -4569,9 +4686,10 @@ The role-based action visibility is handled entirely in the Go builder function.
     {
       "name": "ChangeRole",
       "rel": "change-role",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/users/5",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "role", "type": "select", "label": "Role", "required": true, "options": [
           {"value": "admin", "label": "Administrator"},
           {"value": "editor", "label": "Editor"},
@@ -4580,14 +4698,15 @@ The role-based action visibility is handled entirely in the Go builder function.
           {"value": "subscriber", "label": "Subscriber"}
         ]}
       ],
-      "hints": {"hx-post": "/admin/users/5", "hx-target": "#user-detail", "hx-swap": "outerHTML", "hx-confirm": "Change Jane Doe's role?"}
+      "hints": {"hx-put": "/admin/users/5", "hx-target": "#user-detail", "hx-swap": "outerHTML", "hx-confirm": "Change Jane Doe's role?"}
     },
     {
       "name": "ResetPassword",
       "rel": "reset-password",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/users/5",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "new_password", "type": "password", "label": "New Password", "required": true},
         {"name": "confirm_password", "type": "password", "label": "Confirm Password", "required": true}
       ]
@@ -4596,6 +4715,9 @@ The role-based action visibility is handled entirely in the Go builder function.
       "name": "DeleteUser",
       "method": "DELETE",
       "href": "/admin/users/5",
+      "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"}
+      ],
       "hints": {"hx-delete": "/admin/users/5", "hx-target": "#main-content", "hx-swap": "innerHTML", "hx-confirm": "Delete user \"Jane Doe\"? This cannot be undone.", "destructive": true}
     }
   ]
@@ -4632,9 +4754,10 @@ When an editor views the same user, the ChangeRole, ResetPassword, and DeleteUse
     {
       "name": "UpdateUser",
       "rel": "edit",
-      "method": "POST",
+      "method": "PUT",
       "href": "/admin/users/5",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "PUT"},
         {"name": "username", "type": "text", "label": "Username", "required": true, "value": "jdoe"},
         {"name": "email", "type": "email", "label": "Email", "required": true, "value": "jdoe@example.com"},
         {"name": "display_name", "type": "text", "label": "Display Name", "value": "Jane Doe"},
@@ -4672,7 +4795,7 @@ func userFormRepresentation(user *User, errors map[string]string) hyper.Represen
         t := hyper.Route("users.show", "id", strconv.Itoa(user.ID))
         self = t.Ptr()
         actionName = "UpdateUser"
-        actionMethod = "POST"
+        actionMethod = "PUT"
         target = hyper.Route("users.update", "id", strconv.Itoa(user.ID))
     } else {
         kind = "user-form"
@@ -4710,6 +4833,28 @@ func userFormRepresentation(user *User, errors map[string]string) hyper.Represen
         }
     }
 
+    // For update actions (PUT), prepend the _method hidden field
+    var actionFields []hyper.Field
+    if actionMethod == "PUT" {
+        actionFields = append([]hyper.Field{
+            {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "PUT"}},
+        }, fields...)
+    } else {
+        actionFields = fields
+    }
+
+    // htmx can send PUT directly — use hx-put for updates, hx-post for creates
+    hints := map[string]any{
+        "hx-target":   "#main-content",
+        "hx-swap":     "innerHTML",
+        "hx-push-url": "true",
+    }
+    if actionMethod == "PUT" {
+        hints["hx-put"] = ""
+    } else {
+        hints["hx-post"] = ""
+    }
+
     return hyper.Representation{
         Kind: kind,
         Self: self,
@@ -4719,13 +4864,8 @@ func userFormRepresentation(user *User, errors map[string]string) hyper.Represen
                 Rel:    "submit",
                 Method: actionMethod,
                 Target: target,
-                Fields: fields,
-                Hints: map[string]any{
-                    "hx-post":     "",
-                    "hx-target":   "#main-content",
-                    "hx-swap":     "innerHTML",
-                    "hx-push-url": "true",
-                },
+                Fields: actionFields,
+                Hints:  hints,
             },
         },
         Hints: map[string]any{
@@ -5679,8 +5819,9 @@ func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
                         Name:   "ConfirmDelete",
                         Rel:    "confirm",
                         Method: "DELETE",
-                        Target: hyper.Route("categories.delete", "id", strconv.Itoa(catID)),
+                        Target: hyper.Route("categories.destroy", "id", strconv.Itoa(catID)),
                         Fields: []hyper.Field{
+                            {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
                             {Name: "reassign_to", Type: "select", Label: "Reassign posts to", Required: true, Options: options},
                         },
                         Hints: map[string]any{
@@ -5758,6 +5899,7 @@ func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
       "method": "DELETE",
       "href": "/admin/categories/3",
       "fields": [
+        {"name": "_method", "type": "hidden", "value": "DELETE"},
         {"name": "reassign_to", "type": "select", "label": "Reassign posts to", "required": true, "options": [
           {"value": "1", "label": "Uncategorized (default)"},
           {"value": "2", "label": "Tutorials"},
@@ -6113,7 +6255,18 @@ The spec has no convention for drag-and-drop UI patterns. The `htmlc` template m
 
 This would be non-normative guidance for codec implementors. **Severity: Low** — the workaround is straightforward, and drag-and-drop semantics vary significantly across implementations.
 
-### 16.12 Summary Table
+### 16.12 Method Override Convention for HTML Forms
+
+HTML forms only support GET and POST natively. This document uses a `_method` hidden field convention to enable PUT and DELETE via standard form submissions:
+
+- **`Action.Method` reflects the true semantic method** (PUT, DELETE) — this is the spec-level concern. Clients that can issue arbitrary HTTP methods (htmx via `hx-put`/`hx-delete`, or JavaScript `fetch`) use `Method` directly.
+- **The `_method` hidden field is a transport-level concern** — it exists solely for progressive enhancement, allowing plain HTML form submissions (which are always POST) to carry the intended method. The `methodoverride` middleware on the server translates `_method=PUT` or `_method=DELETE` in a POST body into the corresponding HTTP method before routing.
+- **Codecs rendering HTML forms are responsible for adding the `_method` field** when `Action.Method` is not GET or POST. This is a recommended pattern for HTML codec implementations — the codec inspects `Action.Method` and, if it is PUT or DELETE, ensures a hidden `_method` input is rendered in the form and sets the form's `method="POST"`.
+- **JSON codecs ignore `_method`** — the field appears in the `fields` array like any other field, but JSON API clients use `Action.Method` to determine the HTTP method and do not need the override.
+
+This pattern enables `dispatch.Resource` helpers (which register PUT for update and DELETE for destroy) to work seamlessly with both JavaScript-capable clients (htmx) and plain HTML form submissions.
+
+### 16.13 Summary Table
 
 | # | Gap / Observation | Severity | Section | Status |
 |---|-------------------|----------|---------|--------|
@@ -6128,3 +6281,4 @@ This would be non-normative guidance for codec implementors. **Severity: Low** �
 | 16.9 | Cross-Resource References in Forms — no resource-picker type | Low | §10.1 Field | Open |
 | 16.10 | Settings as Collection of Individual Resources — name-keyed members | Low | §12 Settings | Resolved — settings modelled as collection |
 | 16.11 | Drag-and-Drop Reorder — no sortable hint convention | Low | §11.4 Hints | Open |
+| 16.12 | Method Override Convention — `_method` hidden field for HTML form PUT/DELETE | Low | §7 Action, §10.1 Field | Resolved — documented pattern for HTML codec implementations |
