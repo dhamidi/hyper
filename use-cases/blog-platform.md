@@ -5,7 +5,7 @@ This document explores building a WordPress-like blog administration panel using
 The stack:
 
 - **`hyper`** — representation model with `Representation`, `Action`, `Field`, `Link`, `Hints`, `Embedded`, `Meta` (this repo's spec)
-- **`dispatch`** — router with named routes and reverse URL generation via `RouteRef` (§8.1)
+- **`dispatch`** — semantic HTTP router with named routes, URI template matching, `Scope`-based route grouping, `Resource` helpers for RESTful CRUD, `BindHelpers` for type-safe URL generation, and reverse URL resolution via `Router.Path` / `Router.URL` (§8.1)
 - **`github.com/dhamidi/htmlc`** — server-side Vue-style component engine for Go; parses `.vue` Single File Components and renders them to HTML strings
 - **htmx** — frontend library for HTML-over-the-wire interactions
 
@@ -14,122 +14,188 @@ Key properties:
 - **HTML-first** — the primary output is server-rendered HTML; JSON is available via content negotiation
 - **htmx attributes flow through `Action.Hints`** — the spec's open `Hints` map (§11.4) carries `hx-target`, `hx-swap`, `hx-trigger`, and other htmx directives
 - **`Representation.Kind` maps to `htmlc` component names** — `"post-list"` renders via `post-list.vue`, `"dashboard"` via `dashboard.vue`
-- **Named routes via `dispatch`** — `RouteRef` targets resolve to URLs through `DispatchResolver` (§15.1)
+- **Named routes via `dispatch`** — `RouteRef` targets resolve to URLs through a `DispatchResolver` adapter that delegates to `dispatch.Router.URL` (§15.1)
 - **Fragment vs. document rendering** — `RenderMode` (§9.4) controls whether the server returns a full admin page (with sidebar/header layout) or an HTML fragment for htmx partial requests
 
 ## 2. Application Setup
 
 ### 2.1 Dispatch Router with Named Routes
 
-The `dispatch` router defines all routes with names for reverse URL generation. The blog admin has a large route surface:
+The `dispatch` router defines all routes with names for reverse URL generation. The blog admin has a large route surface. Using `dispatch.New()` to create the router and `Scope` with `WithNamePrefix`/`WithTemplatePrefix` to group related routes under a common prefix, the route table becomes:
 
 ```go
-router := dispatch.NewRouter()
+router := dispatch.New()
 
-// Dashboard
-router.Get("dashboard", "/admin")
+// All admin routes share the /admin prefix
+router.Scope(func(admin *dispatch.Scope) {
 
-// Posts
-router.Get("posts.list",        "/admin/posts")
-router.Get("posts.new",         "/admin/posts/new")
-router.Post("posts.create",     "/admin/posts")
-router.Get("posts.show",        "/admin/posts/{id}")
-router.Get("posts.edit",        "/admin/posts/{id}/edit")
-router.Post("posts.update",     "/admin/posts/{id}")
-router.Post("posts.trash",      "/admin/posts/{id}/trash")
-router.Post("posts.publish",    "/admin/posts/{id}/publish")
-router.Post("posts.unpublish",  "/admin/posts/{id}/unpublish")
-router.Post("posts.schedule",   "/admin/posts/{id}/schedule")
-router.Get("posts.revisions",   "/admin/posts/{id}/revisions")
-router.Post("posts.restore",    "/admin/posts/{id}/restore")
+    // Dashboard
+    admin.GET("dashboard", "/", http.HandlerFunc(handleDashboard))
 
-// Pages
-router.Get("pages.list",        "/admin/pages")
-router.Get("pages.new",         "/admin/pages/new")
-router.Post("pages.create",     "/admin/pages")
-router.Get("pages.show",        "/admin/pages/{id}")
-router.Get("pages.edit",        "/admin/pages/{id}/edit")
-router.Post("pages.update",     "/admin/pages/{id}")
-router.Post("pages.trash",      "/admin/pages/{id}/trash")
-router.Post("pages.publish",    "/admin/pages/{id}/publish")
+    // Posts — CRUD plus workflow actions
+    admin.Scope(func(posts *dispatch.Scope) {
+        posts.GET("list",       "/",            http.HandlerFunc(handlePostList))
+        posts.GET("new",        "/new",         http.HandlerFunc(handleNewPost))
+        posts.POST("create",    "/",            http.HandlerFunc(handleCreatePost))
+        posts.GET("show",       "/{id}",        http.HandlerFunc(handleShowPost))
+        posts.GET("edit",       "/{id}/edit",   http.HandlerFunc(handleEditPost))
+        posts.POST("update",    "/{id}",        http.HandlerFunc(handleUpdatePost))
+        posts.POST("trash",     "/{id}/trash",  http.HandlerFunc(handleTrashPost))
+        posts.POST("publish",   "/{id}/publish",http.HandlerFunc(handlePublishPost))
+        posts.POST("unpublish", "/{id}/unpublish", http.HandlerFunc(handleUnpublishPost))
+        posts.POST("schedule",  "/{id}/schedule",  http.HandlerFunc(handleSchedulePost))
+        posts.GET("revisions",  "/{id}/revisions", http.HandlerFunc(handlePostRevisions))
+        posts.POST("restore",   "/{id}/restore",   http.HandlerFunc(handleRestorePost))
+    }, dispatch.WithNamePrefix("posts"), dispatch.WithTemplatePrefix("/posts"))
 
-// Categories
-router.Get("categories.list",   "/admin/categories")
-router.Post("categories.create","/admin/categories")
-router.Get("categories.show",   "/admin/categories/{id}")
-router.Post("categories.update","/admin/categories/{id}")
-router.Delete("categories.delete","/admin/categories/{id}")
+    // Pages — similar to posts but fewer workflow actions
+    admin.Scope(func(pages *dispatch.Scope) {
+        pages.GET("list",    "/",            http.HandlerFunc(handlePageList))
+        pages.GET("new",     "/new",         http.HandlerFunc(handleNewPage))
+        pages.POST("create", "/",            http.HandlerFunc(handleCreatePage))
+        pages.GET("show",    "/{id}",        http.HandlerFunc(handleShowPage))
+        pages.GET("edit",    "/{id}/edit",   http.HandlerFunc(handleEditPage))
+        pages.POST("update", "/{id}",        http.HandlerFunc(handleUpdatePage))
+        pages.POST("trash",  "/{id}/trash",  http.HandlerFunc(handleTrashPage))
+        pages.POST("publish","/{id}/publish",http.HandlerFunc(handlePublishPage))
+    }, dispatch.WithNamePrefix("pages"), dispatch.WithTemplatePrefix("/pages"))
 
-// Tags
-router.Get("tags.list",         "/admin/tags")
-router.Post("tags.create",      "/admin/tags")
-router.Get("tags.show",         "/admin/tags/{id}")
-router.Post("tags.update",      "/admin/tags/{id}")
-router.Delete("tags.delete",    "/admin/tags/{id}")
+    // Categories — standard CRUD via Resource helper
+    admin.Scope(func(s *dispatch.Scope) {
+        // Note: Resource registers <name>.index, .show, .create, .destroy, etc.
+        // We only need index, show, create, update (via PUT), and destroy.
+        // Resource uses PUT for update; the blog uses POST — register manually.
+        s.GET("list",      "/",    http.HandlerFunc(handleCategoryList))
+        s.POST("create",   "/",    http.HandlerFunc(handleCreateCategory))
+        s.GET("show",      "/{id}",http.HandlerFunc(handleShowCategory))
+        s.POST("update",   "/{id}",http.HandlerFunc(handleUpdateCategory))
+        s.DELETE("delete",  "/{id}",http.HandlerFunc(handleDeleteCategory))
+    }, dispatch.WithNamePrefix("categories"), dispatch.WithTemplatePrefix("/categories"))
 
-// Comments
-router.Get("comments.list",     "/admin/comments")
-router.Get("comments.show",     "/admin/comments/{id}")
-router.Post("comments.approve", "/admin/comments/{id}/approve")
-router.Post("comments.spam",    "/admin/comments/{id}/spam")
-router.Post("comments.trash",   "/admin/comments/{id}/trash")
-router.Post("comments.reply",   "/admin/comments/{id}/reply")
-router.Delete("comments.delete","/admin/comments/{id}")
+    // Tags — same shape as categories
+    admin.Scope(func(s *dispatch.Scope) {
+        s.GET("list",    "/",    http.HandlerFunc(handleTagList))
+        s.POST("create", "/",    http.HandlerFunc(handleCreateTag))
+        s.GET("show",    "/{id}",http.HandlerFunc(handleShowTag))
+        s.POST("update", "/{id}",http.HandlerFunc(handleUpdateTag))
+        s.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteTag))
+    }, dispatch.WithNamePrefix("tags"), dispatch.WithTemplatePrefix("/tags"))
 
-// Media
-router.Get("media.list",        "/admin/media")
-router.Post("media.upload",     "/admin/media")
-router.Get("media.show",        "/admin/media/{id}")
-router.Post("media.update",     "/admin/media/{id}")
-router.Delete("media.delete",   "/admin/media/{id}")
+    // Comments — moderation actions on top of basic listing
+    admin.Scope(func(c *dispatch.Scope) {
+        c.GET("list",     "/",              http.HandlerFunc(handleCommentList))
+        c.GET("show",     "/{id}",          http.HandlerFunc(handleShowComment))
+        c.POST("approve", "/{id}/approve",  http.HandlerFunc(handleApproveComment))
+        c.POST("spam",    "/{id}/spam",     http.HandlerFunc(handleSpamComment))
+        c.POST("trash",   "/{id}/trash",    http.HandlerFunc(handleTrashComment))
+        c.POST("reply",   "/{id}/reply",    http.HandlerFunc(handleReplyComment))
+        c.DELETE("delete", "/{id}",         http.HandlerFunc(handleDeleteComment))
+    }, dispatch.WithNamePrefix("comments"), dispatch.WithTemplatePrefix("/comments"))
 
-// Users
-router.Get("users.list",        "/admin/users")
-router.Get("users.new",         "/admin/users/new")
-router.Post("users.create",     "/admin/users")
-router.Get("users.show",        "/admin/users/{id}")
-router.Get("users.edit",        "/admin/users/{id}/edit")
-router.Post("users.update",     "/admin/users/{id}")
-router.Delete("users.delete",   "/admin/users/{id}")
+    // Media
+    admin.Scope(func(m *dispatch.Scope) {
+        m.GET("list",    "/",    http.HandlerFunc(handleMediaList))
+        m.POST("upload", "/",    http.HandlerFunc(handleMediaUpload))
+        m.GET("show",    "/{id}",http.HandlerFunc(handleShowMedia))
+        m.POST("update", "/{id}",http.HandlerFunc(handleUpdateMedia))
+        m.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteMedia))
+    }, dispatch.WithNamePrefix("media"), dispatch.WithTemplatePrefix("/media"))
 
-// Menus
-router.Get("menus.list",         "/admin/menus")
-router.Post("menus.create",      "/admin/menus")
-router.Get("menus.show",         "/admin/menus/{id}")
-router.Post("menus.update",      "/admin/menus/{id}")
-router.Delete("menus.delete",    "/admin/menus/{id}")
-router.Post("menus.items.add",   "/admin/menus/{id}/items")
-router.Post("menus.items.update","/admin/menus/{menu_id}/items/{item_id}")
-router.Delete("menus.items.delete","/admin/menus/{menu_id}/items/{item_id}")
-router.Post("menus.reorder",     "/admin/menus/{id}/reorder")
+    // Users — full CRUD with new/edit forms
+    admin.Scope(func(u *dispatch.Scope) {
+        u.GET("list",    "/",          http.HandlerFunc(handleUserList))
+        u.GET("new",     "/new",       http.HandlerFunc(handleNewUser))
+        u.POST("create", "/",          http.HandlerFunc(handleCreateUser))
+        u.GET("show",    "/{id}",      http.HandlerFunc(handleShowUser))
+        u.GET("edit",    "/{id}/edit", http.HandlerFunc(handleEditUser))
+        u.POST("update", "/{id}",      http.HandlerFunc(handleUpdateUser))
+        u.DELETE("delete","/{id}",      http.HandlerFunc(handleDeleteUser))
+    }, dispatch.WithNamePrefix("users"), dispatch.WithTemplatePrefix("/users"))
 
-// Settings (GET to view, POST to save)
-router.Get("settings.general",    "/admin/settings/general")
-router.Post("settings.general",   "/admin/settings/general")
-router.Get("settings.reading",    "/admin/settings/reading")
-router.Post("settings.reading",   "/admin/settings/reading")
-router.Get("settings.writing",    "/admin/settings/writing")
-router.Post("settings.writing",   "/admin/settings/writing")
-router.Get("settings.discussion", "/admin/settings/discussion")
-router.Post("settings.discussion","/admin/settings/discussion")
-router.Get("settings.permalink",  "/admin/settings/permalink")
-router.Post("settings.permalink", "/admin/settings/permalink")
+    // Menus — nested items sub-resource
+    admin.Scope(func(m *dispatch.Scope) {
+        m.GET("list",    "/",    http.HandlerFunc(handleMenuList))
+        m.POST("create", "/",    http.HandlerFunc(handleCreateMenu))
+        m.GET("show",    "/{id}",http.HandlerFunc(handleShowMenu))
+        m.POST("update", "/{id}",http.HandlerFunc(handleUpdateMenu))
+        m.DELETE("delete","/{id}",http.HandlerFunc(handleDeleteMenu))
+        m.POST("items.add",    "/{id}/items",                    http.HandlerFunc(handleAddMenuItem))
+        m.POST("items.update", "/{menu_id}/items/{item_id}",     http.HandlerFunc(handleUpdateMenuItem))
+        m.DELETE("items.delete","/{menu_id}/items/{item_id}",     http.HandlerFunc(handleDeleteMenuItem))
+        m.POST("reorder",      "/{id}/reorder",                  http.HandlerFunc(handleReorderMenu))
+    }, dispatch.WithNamePrefix("menus"), dispatch.WithTemplatePrefix("/menus"))
 
-// Revisions
-router.Get("revisions.list",    "/admin/revisions")
-router.Get("revisions.show",    "/admin/revisions/{id}")
-router.Post("revisions.restore","/admin/revisions/{id}/restore")
+    // Settings — each section is a SingularResource-like pair (GET to view, POST to save).
+    // dispatch.SingularResource could be used, but the settings don't need new/edit/destroy,
+    // so explicit registration is cleaner.
+    admin.Scope(func(s *dispatch.Scope) {
+        for _, section := range []string{"general", "reading", "writing", "discussion", "permalink"} {
+            s.GET(section+".show",  "/"+section, http.HandlerFunc(handleShowSettings))
+            s.POST(section+".save", "/"+section, http.HandlerFunc(handleSaveSettings))
+        }
+    }, dispatch.WithNamePrefix("settings"), dispatch.WithTemplatePrefix("/settings"))
+
+    // Revisions
+    admin.Scope(func(rev *dispatch.Scope) {
+        rev.GET("list",     "/",              http.HandlerFunc(handleRevisionList))
+        rev.GET("show",     "/{id}",          http.HandlerFunc(handleShowRevision))
+        rev.POST("restore", "/{id}/restore",  http.HandlerFunc(handleRestoreRevision))
+    }, dispatch.WithNamePrefix("revisions"), dispatch.WithTemplatePrefix("/revisions"))
+
+}, dispatch.WithTemplatePrefix("/admin"))
 ```
+
+**Note on `dispatch.Resource`:** Several resource groups above (categories, tags, media, users) follow standard CRUD patterns that could use `dispatch.Resource()`. However, the blog uses `POST` for updates rather than `PUT`/`PATCH`, and several resources have non-standard actions (e.g., comment moderation, post workflow transitions). Using explicit `Scope` registration keeps the route table readable and avoids mismatches with `Resource`'s Rails-style conventions (which use `PUT`/`PATCH` for updates and name the delete route `destroy`).
 
 ### 2.2 DispatchResolver
 
-The `DispatchResolver` (per §15.1) bridges `hyper.Target` route references to resolved URLs:
+The `DispatchResolver` (per §15.1) bridges `hyper.Target` route references to resolved URLs by delegating to `dispatch.Router.URL`:
+
+```go
+// DispatchResolver adapts a dispatch.Router to hyper's Resolver interface.
+type DispatchResolver struct {
+    Router *dispatch.Router
+}
+
+func (d DispatchResolver) ResolveTarget(ctx context.Context, t hyper.Target) (*url.URL, error) {
+    if t.URL != nil {
+        u := *t.URL
+        if t.Query != nil {
+            u.RawQuery = t.Query.Encode()
+        }
+        return &u, nil
+    }
+    if t.Route == nil {
+        return nil, fmt.Errorf("target has neither URL nor Route")
+    }
+    // Convert RouteRef.Params to dispatch.Params and call Router.URL
+    params := dispatch.Params(t.Route.Params)
+    u, err := d.Router.URL(t.Route.Name, params)
+    if err != nil {
+        return nil, err
+    }
+    // Merge query parameters from both RouteRef.Query and Target.Query
+    q := u.Query()
+    for k, vs := range t.Route.Query {
+        for _, v := range vs {
+            q.Add(k, v)
+        }
+    }
+    for k, vs := range t.Query {
+        for _, v := range vs {
+            q.Add(k, v)
+        }
+    }
+    u.RawQuery = q.Encode()
+    return u, nil
+}
+```
 
 ```go
 resolver := DispatchResolver{Router: router}
 ```
 
-All `Target` values in this document use `RouteRef` for named routes. The resolver converts them to concrete URLs at render time.
+All `Target` values in this document use `RouteRef` for named routes (constructed via the `hyper.Route()` convenience helper). The resolver converts them to concrete URLs at render time by calling `dispatch.Router.URL`, which expands the route's URI template with the provided parameters.
 
 ### 2.3 htmlc Engine
 
@@ -168,7 +234,23 @@ func renderMode(r *http.Request) hyper.RenderMode {
 
 The htmlc codec uses this mode to decide whether to call `eng.RenderPage` (full document with styles injected before `</head>`) or `eng.RenderFragment` (partial HTML with styles prepended). This is critical for the blog admin where most interactions — status transitions, inline edits, comment moderation — are htmx-driven partial updates.
 
-### 2.6 Role-Based Action Filtering
+### 2.6 Route Parameter Extraction
+
+Handlers extract route parameters via `dispatch.ParamsFromContext`, which returns the matched `dispatch.Params` from the request context. A thin helper keeps handler code concise:
+
+```go
+// routeParam extracts a named route parameter from the request context.
+// Returns "" if the parameter is not present.
+func routeParam(r *http.Request, name string) string {
+    params, ok := dispatch.ParamsFromContext(r.Context())
+    if !ok {
+        return ""
+    }
+    return params.Get(name)
+}
+```
+
+### 2.7 Role-Based Action Filtering
 
 WordPress has a five-tier role hierarchy. Actions exposed in representations must respect the current user's role. This helper filters actions before they reach the codec:
 
@@ -799,7 +881,7 @@ func dashboardRepresentation(stats DashboardStats, recentActivity []ActivityEntr
             {Rel: "comments", Target: hyper.Route("comments.list"), Title: "Comments"},
             {Rel: "media", Target: hyper.Route("media.list"), Title: "Media Library"},
             {Rel: "users", Target: hyper.Route("users.list"), Title: "Users"},
-            {Rel: "settings", Target: hyper.Route("settings.general"), Title: "Settings"},
+            {Rel: "settings", Target: hyper.Route("settings.general.show"), Title: "Settings"},
             {Rel: "site", Target: hyper.MustParseTarget("/"), Title: "View Site"},
         },
         Actions: []hyper.Action{
@@ -4199,7 +4281,7 @@ func menuListRepresentation(menus []Menu) hyper.Representation {
 
 ```go
 func handleAddMenuItem(w http.ResponseWriter, r *http.Request) {
-    menuID, _ := strconv.Atoi(dispatch.Param(r, "id"))
+    menuID, _ := strconv.Atoi(routeParam(r, "id"))
     menu, err := menuStore.Get(menuID)
     if err != nil {
         renderError(w, r, http.StatusNotFound, "Menu not found")
@@ -4649,7 +4731,7 @@ func handleChangeRole(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    targetUserID, _ := strconv.Atoi(dispatch.Param(r, "id"))
+    targetUserID, _ := strconv.Atoi(routeParam(r, "id"))
     targetUser, err := userStore.Get(targetUserID)
     if err != nil {
         renderError(w, r, http.StatusNotFound, "User not found")
@@ -4820,11 +4902,11 @@ func settingsRepresentation(section string, settings SiteSettings, errors map[st
         label string
         route string
     }{
-        {"general", "General", "settings.general"},
-        {"reading", "Reading", "settings.reading"},
-        {"writing", "Writing", "settings.writing"},
-        {"discussion", "Discussion", "settings.discussion"},
-        {"permalink", "Permalinks", "settings.permalink"},
+        {"general", "General", "settings.general.show"},
+        {"reading", "Reading", "settings.reading.show"},
+        {"writing", "Writing", "settings.writing.show"},
+        {"discussion", "Discussion", "settings.discussion.show"},
+        {"permalink", "Permalinks", "settings.permalink.show"},
     }
 
     var links []hyper.Link
@@ -4838,7 +4920,7 @@ func settingsRepresentation(section string, settings SiteSettings, errors map[st
 
     return hyper.Representation{
         Kind: kind,
-        Self: hyper.Route("settings." + section).Ptr(),
+        Self: hyper.Route("settings." + section + ".show").Ptr(),
         State: hyper.Object(hyper.StateFrom(
             "section", section,
         )),
@@ -4848,7 +4930,7 @@ func settingsRepresentation(section string, settings SiteSettings, errors map[st
                 Name:   "SaveSettings",
                 Rel:    "save",
                 Method: "POST",
-                Target: hyper.Route("settings." + section),
+                Target: hyper.Route("settings." + section + ".save"),
                 Fields: populatedFields,
                 Hints: map[string]any{
                     "hx-post":   "",
@@ -5300,7 +5382,7 @@ func handlePermanentDeletePost(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    postID, _ := strconv.Atoi(dispatch.Param(r, "id"))
+    postID, _ := strconv.Atoi(routeParam(r, "id"))
     post, err := postStore.Get(postID)
     if err != nil {
         renderError(w, r, http.StatusNotFound, "Post not found")
@@ -5557,7 +5639,7 @@ func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    catID, _ := strconv.Atoi(dispatch.Param(r, "id"))
+    catID, _ := strconv.Atoi(routeParam(r, "id"))
     category, err := categoryStore.Get(catID)
     if err != nil {
         renderError(w, r, http.StatusNotFound, "Category not found")
