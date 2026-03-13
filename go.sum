@@ -1,0 +1,4 @@
+github.com/dhamidi/htmlc v0.2.3 h1:h0976uxAHpZ9UvcX1+4RnrYog67ZJHbtw4xHhr/dxLg=
+github.com/dhamidi/htmlc v0.2.3/go.mod h1:4I7vYtw22kyE3OBn51t7RdSJpSxHtsUVOXRYaWMw/xs=
+golang.org/x/net v0.51.0 h1:94R/GTO7mt3/4wIKpcR5gkGmRLOuE/2hNGeWq/GBIFo=
+golang.org/x/net v0.51.0/go.mod h1:aamm+2QF5ogm02fjy5Bb7CQ0WMt1/WVM7FtyaTLlA9Y=

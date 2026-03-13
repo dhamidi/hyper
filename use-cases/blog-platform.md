@@ -6,7 +6,7 @@ The stack:
 
 - **`hyper`** — representation model with `Representation`, `Action`, `Field`, `Link`, `Hints`, `Embedded`, `Meta` (this repo's spec)
 - **`dispatch`** — router with named routes and reverse URL generation via `RouteRef` (§8.1)
-- **`htmlc`** — server-side Go template engine using Vue.js SFC (`.vue`) syntax (§15.5)
+- **`github.com/dhamidi/htmlc`** — server-side Vue-style component engine for Go; parses `.vue` Single File Components and renders them to HTML strings
 - **htmx** — frontend library for HTML-over-the-wire interactions
 
 Key properties:
@@ -134,13 +134,12 @@ All `Target` values in this document use `RouteRef` for named routes. The resolv
 ### 2.3 htmlc Engine
 
 ```go
-engine, err := htmlc.New(
-    htmlc.WithDirectory("components/"),
-    htmlc.WithLayout("admin-layout"),
-)
+engine, err := htmlc.New(htmlc.Options{
+    ComponentDir: "components/",
+})
 ```
 
-Each `Representation.Kind` maps to a `.vue` component file. The `admin-layout` wraps every full-page render with the sidebar navigation, header bar, and notification area common to all admin screens.
+Each `Representation.Kind` maps to a `.vue` component file. Layout wrapping (sidebar navigation, header bar, notification area) is handled by a layout component (e.g. `AdminLayout.vue`) that page-level components compose via Vue-style component nesting — `htmlc` does not have a built-in layout option. A page component's template includes `<AdminLayout>...</AdminLayout>` to get the common admin chrome.
 
 ### 2.4 Renderer with Codecs
 
@@ -167,7 +166,7 @@ func renderMode(r *http.Request) hyper.RenderMode {
 }
 ```
 
-The htmlc codec uses this mode to decide whether to call `eng.RenderPage` (full document with admin layout) or `eng.RenderComponent` (fragment only). This is critical for the blog admin where most interactions — status transitions, inline edits, comment moderation — are htmx-driven partial updates.
+The htmlc codec uses this mode to decide whether to call `eng.RenderPage` (full document with styles injected before `</head>`) or `eng.RenderFragment` (partial HTML with styles prepended). This is critical for the blog admin where most interactions — status transitions, inline edits, comment moderation — are htmx-driven partial updates.
 
 ### 2.6 Role-Based Action Filtering
 
