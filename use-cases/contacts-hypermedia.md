@@ -10,7 +10,7 @@ This use case walks through every feature in the book, building each one with:
 
 - **`hyper`** — representation model with `Representation`, `Action`, `Field`, `Link`, `Hints`, `Embedded`, `Meta` (this repo's spec)
 - **`dispatch`** — router with named routes and reverse URL generation via `RouteRef` (§8.1)
-- **`htmlc`** — server-side Go template engine using Vue.js SFC (`.vue`) syntax (§15.5)
+- **`htmlc`** — server-side Go template engine using Vue.js SFC (`.vue`) syntax (§16.5)
 - **htmx** — frontend library for HTML-over-the-wire interactions
 
 Key properties:
@@ -58,13 +58,12 @@ All `Target` values in this document use `RouteRef` for named routes. The resolv
 ### 2.3 htmlc Engine
 
 ```go
-engine, err := htmlc.New(
-    htmlc.WithDirectory("components/"),
-    htmlc.WithLayout("layout"),
-)
+engine, err := htmlc.New(htmlc.Options{
+    ComponentDir: "components/",
+})
 ```
 
-Each `Representation.Kind` maps to a `.vue` component file. The `representationToScope` function (§15.5) converts a `hyper.Representation` into the `map[string]any` scope that `htmlc` templates consume.
+Each `Representation.Kind` maps to a `.vue` component file. Layout wrapping is handled by a layout component (e.g. `layout.vue`) that page-level components compose via Vue-style nesting — `htmlc` does not have a built-in layout option. The `representationToScope` function (§16.5) converts a `hyper.Representation` into the `map[string]any` scope that `htmlc` templates consume.
 
 ### 2.4 Renderer with Codecs
 
@@ -91,7 +90,7 @@ func renderMode(r *http.Request) hyper.RenderMode {
 }
 ```
 
-The htmlc codec uses this mode to decide whether to call `eng.RenderPage` (full document with layout) or `eng.RenderComponent` (fragment only).
+The htmlc codec uses this mode to decide whether to call `eng.RenderPage` (full document with styles injected before `</head>`) or `eng.RenderFragment` (fragment only).
 
 ## 3. Domain Layer
 
