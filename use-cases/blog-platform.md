@@ -129,14 +129,16 @@ router.Scope(func(admin *dispatch.Scope) {
         m.POST("reorder",      "/{id}/reorder",                  http.HandlerFunc(handleReorderMenu))
     }, dispatch.WithNamePrefix("menus"), dispatch.WithTemplatePrefix("/menus"))
 
-    // Settings — each section is a SingularResource-like pair (GET to view, POST to save).
-    // dispatch.SingularResource could be used, but the settings don't need new/edit/destroy,
-    // so explicit registration is cleaner.
+    // Settings — a collection of individually addressable setting resources.
+    // Each setting (e.g., "timezone", "site_title") is its own resource with GET/PUT.
+    // The collection endpoint lists all settings grouped by section.
     admin.Scope(func(s *dispatch.Scope) {
-        for _, section := range []string{"general", "reading", "writing", "discussion", "permalink"} {
-            s.GET(section+".show",  "/"+section, http.HandlerFunc(handleShowSettings))
-            s.POST(section+".save", "/"+section, http.HandlerFunc(handleSaveSettings))
-        }
+        s.GET("list", "/", http.HandlerFunc(handleSettingsList))
+
+        s.Scope(func(item *dispatch.Scope) {
+            item.GET("show", "/{name}", http.HandlerFunc(handleShowSetting))
+            item.PUT("update", "/{name}", http.HandlerFunc(handleUpdateSetting))
+        })
     }, dispatch.WithNamePrefix("settings"), dispatch.WithTemplatePrefix("/settings"))
 
     // Revisions
@@ -543,6 +545,23 @@ type DiscussionSettings struct {
 type PermalinkSettings struct {
     Structure string // "plain", "day-name", "month-name", "numeric", "post-name", "custom"
     Custom    string
+}
+
+// SettingOption is an allowed value for an enumerated setting.
+type SettingOption struct {
+    Value string
+    Label string
+    Group string // Hierarchical grouping label (e.g. "Americas", "Europe")
+}
+
+// SettingDefinition describes a single addressable setting.
+type SettingDefinition struct {
+    Name    string
+    Section string // "general", "reading", "writing", "discussion", "permalink"
+    Type    string // "text", "email", "url", "select", "number", "checkbox"
+    Label   string
+    Help    string
+    Options []SettingOption // For enumerated settings
 }
 ```
 
@@ -4785,228 +4804,220 @@ The "last admin" check is a business rule that only surfaces at submission time.
 
 ## 12. Settings (Interaction 11)
 
-Settings are singleton resources — they do not have IDs or collection semantics. Each settings section (general, reading, writing, discussion, permalink) is its own page with its own form. The settings representation uses navigational links to connect the sections, creating a tabbed interface without client-side routing.
+Settings are modelled as a collection of individually addressable resources. Each setting (e.g., `timezone`, `site_title`, `posts_per_page`) is its own resource at `/admin/settings/{name}` with `GET` to view and `PUT` to update. The collection endpoint (`GET /admin/settings`) lists all settings, grouped by section via embedded representations. This resource-oriented model resolves the §16.5 gap: enumerated settings like timezone embed their available options as `setting-option` representations with a `group` field for hierarchical grouping, eliminating the need for nested `Option` values.
 
-### 12.1 Settings Representation
+### 12.1 Setting Definitions
 
 ```go
-// settingsSectionFields defines the fields for each settings section.
-var generalSettingsFields = []hyper.Field{
-    {Name: "site_title", Type: "text", Label: "Site Title", Required: true},
-    {Name: "tagline", Type: "text", Label: "Tagline", Help: "In a few words, explain what this site is about."},
-    {Name: "site_url", Type: "url", Label: "Site Address (URL)", Required: true},
-    {Name: "admin_email", Type: "email", Label: "Administration Email Address", Required: true},
-    {Name: "timezone", Type: "select", Label: "Timezone", Options: []hyper.Option{
-        {Value: "UTC", Label: "UTC+0"},
-        {Value: "America/New_York", Label: "Eastern Time (US & Canada)"},
-        {Value: "America/Chicago", Label: "Central Time (US & Canada)"},
-        {Value: "America/Denver", Label: "Mountain Time (US & Canada)"},
-        {Value: "America/Los_Angeles", Label: "Pacific Time (US & Canada)"},
-        {Value: "Europe/London", Label: "London"},
-        {Value: "Europe/Paris", Label: "Paris"},
-        {Value: "Europe/Berlin", Label: "Berlin"},
-        {Value: "Asia/Tokyo", Label: "Tokyo"},
-        {Value: "Asia/Shanghai", Label: "Shanghai"},
-        {Value: "Australia/Sydney", Label: "Sydney"},
-    }},
-    {Name: "date_format", Type: "text", Label: "Date Format", Help: "e.g. January 2, 2006 or 2006-01-02"},
-    {Name: "time_format", Type: "text", Label: "Time Format", Help: "e.g. 3:04 PM or 15:04"},
-    {Name: "language", Type: "select", Label: "Site Language", Options: []hyper.Option{
-        {Value: "en_US", Label: "English (United States)"},
-        {Value: "en_GB", Label: "English (UK)"},
-        {Value: "es_ES", Label: "Spanish"},
-        {Value: "fr_FR", Label: "French"},
-        {Value: "de_DE", Label: "German"},
-        {Value: "ja", Label: "Japanese"},
-        {Value: "zh_CN", Label: "Chinese (Simplified)"},
-    }},
+// Timezone options grouped by region — the "group" field provides hierarchy
+// without requiring nested Option types (resolving §16.5).
+var timezoneOptions = []SettingOption{
+    {Value: "UTC", Label: "UTC+0", Group: "UTC"},
+    {Value: "America/New_York", Label: "Eastern Time (US & Canada)", Group: "Americas"},
+    {Value: "America/Chicago", Label: "Central Time (US & Canada)", Group: "Americas"},
+    {Value: "America/Denver", Label: "Mountain Time (US & Canada)", Group: "Americas"},
+    {Value: "America/Los_Angeles", Label: "Pacific Time (US & Canada)", Group: "Americas"},
+    {Value: "Europe/London", Label: "London", Group: "Europe"},
+    {Value: "Europe/Paris", Label: "Paris", Group: "Europe"},
+    {Value: "Europe/Berlin", Label: "Berlin", Group: "Europe"},
+    {Value: "Asia/Tokyo", Label: "Tokyo", Group: "Asia/Pacific"},
+    {Value: "Asia/Shanghai", Label: "Shanghai", Group: "Asia/Pacific"},
+    {Value: "Australia/Sydney", Label: "Sydney", Group: "Asia/Pacific"},
 }
 
-var readingSettingsFields = []hyper.Field{
-    {Name: "front_page_type", Type: "select", Label: "Your homepage displays", Required: true, Options: []hyper.Option{
-        {Value: "latest_posts", Label: "Your latest posts"},
-        {Value: "static_page", Label: "A static page"},
-    }},
-    {Name: "front_page_id", Type: "select", Label: "Homepage", Help: "Select the page to use as the homepage (only used when front page type is static page)"},
-    {Name: "posts_per_page", Type: "number", Label: "Blog pages show at most", Help: "posts"},
-    {Name: "feed_count", Type: "number", Label: "Syndication feeds show the most recent", Help: "items"},
-    {Name: "search_engine_visibility", Type: "checkbox", Label: "Discourage search engines from indexing this site", Help: "It is up to search engines to honor this request."},
+var languageOptions = []SettingOption{
+    {Value: "en_US", Label: "English (United States)", Group: "English"},
+    {Value: "en_GB", Label: "English (UK)", Group: "English"},
+    {Value: "es_ES", Label: "Spanish", Group: "Romance"},
+    {Value: "fr_FR", Label: "French", Group: "Romance"},
+    {Value: "de_DE", Label: "German", Group: "Germanic"},
+    {Value: "ja", Label: "Japanese", Group: "East Asian"},
+    {Value: "zh_CN", Label: "Chinese (Simplified)", Group: "East Asian"},
 }
 
-var permalinkSettingsFields = []hyper.Field{
-    {Name: "permalink_structure", Type: "select", Label: "Permalink Structure", Required: true, Options: []hyper.Option{
-        {Value: "plain", Label: "Plain (?p=123)"},
-        {Value: "day-name", Label: "Day and name (/2026/03/13/sample-post/)"},
-        {Value: "month-name", Label: "Month and name (/2026/03/sample-post/)"},
-        {Value: "post-name", Label: "Post name (/sample-post/)"},
-        {Value: "custom", Label: "Custom Structure"},
-    }},
-    {Name: "custom_structure", Type: "text", Label: "Custom Structure", Help: "e.g. /%category%/%postname%/ (only used when structure is custom)"},
+var permalinkOptions = []SettingOption{
+    {Value: "plain", Label: "Plain (?p=123)"},
+    {Value: "day-name", Label: "Day and name (/2026/03/13/sample-post/)"},
+    {Value: "month-name", Label: "Month and name (/2026/03/sample-post/)"},
+    {Value: "post-name", Label: "Post name (/sample-post/)"},
+    {Value: "custom", Label: "Custom Structure"},
 }
 
-func settingsRepresentation(section string, settings SiteSettings, errors map[string]string) hyper.Representation {
-    // Map section to fields and values
-    var fields []hyper.Field
-    var values map[string]any
-    var kind string
+var frontPageOptions = []SettingOption{
+    {Value: "latest_posts", Label: "Your latest posts"},
+    {Value: "static_page", Label: "A static page"},
+}
 
-    switch section {
-    case "general":
-        kind = "settings-general"
-        fields = generalSettingsFields
-        values = map[string]any{
-            "site_title":   settings.General.SiteTitle,
-            "tagline":      settings.General.Tagline,
-            "site_url":     settings.General.SiteURL,
-            "admin_email":  settings.General.AdminEmail,
-            "timezone":     settings.General.Timezone,
-            "date_format":  settings.General.DateFormat,
-            "time_format":  settings.General.TimeFormat,
-            "language":     settings.General.Language,
-        }
+// settingDefinitions is the registry of all addressable settings.
+var settingDefinitions = []SettingDefinition{
+    // General
+    {Name: "site_title", Section: "general", Type: "text", Label: "Site Title"},
+    {Name: "tagline", Section: "general", Type: "text", Label: "Tagline", Help: "In a few words, explain what this site is about."},
+    {Name: "site_url", Section: "general", Type: "url", Label: "Site Address (URL)"},
+    {Name: "admin_email", Section: "general", Type: "email", Label: "Administration Email Address"},
+    {Name: "timezone", Section: "general", Type: "select", Label: "Timezone", Options: timezoneOptions},
+    {Name: "date_format", Section: "general", Type: "text", Label: "Date Format", Help: "e.g. January 2, 2006 or 2006-01-02"},
+    {Name: "time_format", Section: "general", Type: "text", Label: "Time Format", Help: "e.g. 3:04 PM or 15:04"},
+    {Name: "language", Section: "general", Type: "select", Label: "Site Language", Options: languageOptions},
+    // Reading
+    {Name: "front_page_type", Section: "reading", Type: "select", Label: "Your homepage displays", Options: frontPageOptions},
+    {Name: "front_page_id", Section: "reading", Type: "select", Label: "Homepage", Help: "Select the page to use as the homepage (only used when front page type is static page)"},
+    {Name: "posts_per_page", Section: "reading", Type: "number", Label: "Blog pages show at most", Help: "posts"},
+    {Name: "feed_count", Section: "reading", Type: "number", Label: "Syndication feeds show the most recent", Help: "items"},
+    {Name: "search_engine_visibility", Section: "reading", Type: "checkbox", Label: "Discourage search engines from indexing this site", Help: "It is up to search engines to honor this request."},
+    // Permalink
+    {Name: "permalink_structure", Section: "permalink", Type: "select", Label: "Permalink Structure", Options: permalinkOptions},
+    {Name: "custom_structure", Section: "permalink", Type: "text", Label: "Custom Structure", Help: "e.g. /%category%/%postname%/ (only used when structure is custom)"},
+}
+```
 
-    case "reading":
-        kind = "settings-reading"
-        fields = readingSettingsFields
-        values = map[string]any{
-            "front_page_type":          settings.Reading.FrontPageDisplays,
-            "front_page_id":            settings.Reading.FrontPageID,
-            "posts_per_page":           settings.Reading.PostsPerPage,
-            "feed_count":               settings.Reading.FeedItems,
-            "search_engine_visibility": settings.Reading.SearchVisible,
-        }
+### 12.2 Settings Collection Representation
 
-    case "permalink":
-        kind = "settings-permalink"
-        fields = permalinkSettingsFields
-        values = map[string]any{
-            "permalink_structure": settings.Permalink.Structure,
-            "custom_structure":    settings.Permalink.Custom,
-        }
-    }
+The settings list (`GET /admin/settings`) returns a collection where each setting is an embedded resource. Settings are grouped by section.
 
-    // Apply values and errors
-    var populatedFields []hyper.Field
-    if errors != nil && len(errors) > 0 {
-        populatedFields = hyper.WithErrors(fields, values, errors)
-    } else {
-        populatedFields = hyper.WithValues(fields, values)
-    }
-
-    // Navigation links between settings sections
-    sections := []struct {
-        name  string
-        label string
-        route string
-    }{
-        {"general", "General", "settings.general.show"},
-        {"reading", "Reading", "settings.reading.show"},
-        {"writing", "Writing", "settings.writing.show"},
-        {"discussion", "Discussion", "settings.discussion.show"},
-        {"permalink", "Permalinks", "settings.permalink.show"},
-    }
-
-    var links []hyper.Link
-    for _, s := range sections {
-        links = append(links, hyper.Link{
-            Rel:    "nav",
-            Target: hyper.Route(s.route),
-            Title:  s.label,
-        })
-    }
-
+```go
+func settingsListRepresentation(settings SiteSettings) hyper.Representation {
     return hyper.Representation{
-        Kind: kind,
-        Self: hyper.Route("settings." + section + ".show").Ptr(),
-        State: hyper.Object(hyper.StateFrom(
-            "section", section,
-        )),
-        Links: links,
+        Kind: "settings",
+        Self: hyper.Route("settings.list").Ptr(),
+        State: hyper.Object{},
+        Embedded: map[string][]hyper.Representation{
+            "items": settingsToRepresentations(settings),
+        },
+    }
+}
+
+func settingsToRepresentations(settings SiteSettings) []hyper.Representation {
+    values := settingsValues(settings)
+    var reps []hyper.Representation
+    for _, def := range settingDefinitions {
+        reps = append(reps, settingRepresentation(def.Name, def, values[def.Name]))
+    }
+    return reps
+}
+
+// settingsValues extracts the current value for each setting name from the SiteSettings struct.
+func settingsValues(settings SiteSettings) map[string]any {
+    return map[string]any{
+        "site_title":              settings.General.SiteTitle,
+        "tagline":                 settings.General.Tagline,
+        "site_url":                settings.General.SiteURL,
+        "admin_email":             settings.General.AdminEmail,
+        "timezone":                settings.General.Timezone,
+        "date_format":             settings.General.DateFormat,
+        "time_format":             settings.General.TimeFormat,
+        "language":                settings.General.Language,
+        "front_page_type":         settings.Reading.FrontPageDisplays,
+        "front_page_id":           settings.Reading.FrontPageID,
+        "posts_per_page":          settings.Reading.PostsPerPage,
+        "feed_count":              settings.Reading.FeedItems,
+        "search_engine_visibility": settings.Reading.SearchVisible,
+        "permalink_structure":     settings.Permalink.Structure,
+        "custom_structure":        settings.Permalink.Custom,
+    }
+}
+```
+
+### 12.3 Individual Setting Representation
+
+Each setting is its own resource with `Kind: "setting"`, a `Self` link, its current value in `State`, and an `UpdateSetting` action. For enumerated settings, the available choices are embedded as `setting-option` representations with a `group` field for hierarchical grouping.
+
+```go
+func settingRepresentation(name string, s SettingDefinition, currentValue any) hyper.Representation {
+    rep := hyper.Representation{
+        Kind: "setting",
+        Self: hyper.Route("settings.show", "name", name).Ptr(),
+        State: hyper.Object{
+            "name":    hyper.Scalar{V: name},
+            "label":   hyper.Scalar{V: s.Label},
+            "section": hyper.Scalar{V: s.Section},
+            "value":   hyper.Scalar{V: currentValue},
+        },
         Actions: []hyper.Action{
             {
-                Name:   "SaveSettings",
-                Rel:    "save",
-                Method: "POST",
-                Target: hyper.Route("settings." + section + ".save"),
-                Fields: populatedFields,
-                Hints: map[string]any{
-                    "hx-post":   "",
-                    "hx-target": "#settings-form",
-                    "hx-swap":   "outerHTML",
+                Name:   "UpdateSetting",
+                Rel:    "update",
+                Method: "PUT",
+                Target: hyper.Route("settings.update", "name", name),
+                Fields: []hyper.Field{
+                    {Name: "value", Type: s.Type, Label: s.Label, Value: currentValue, Help: s.Help},
                 },
             },
         },
-        Meta: map[string]any{
-            "current_section": section,
-        },
     }
+
+    // For enumerated settings, embed the available options as resources.
+    // The "group" field on each option provides hierarchical grouping —
+    // an HTML codec can render grouped <optgroup> elements by reading it.
+    if len(s.Options) > 0 {
+        var optionReps []hyper.Representation
+        for _, opt := range s.Options {
+            optionReps = append(optionReps, hyper.Representation{
+                Kind: "setting-option",
+                State: hyper.Object{
+                    "value": hyper.Scalar{V: opt.Value},
+                    "label": hyper.Scalar{V: opt.Label},
+                    "group": hyper.Scalar{V: opt.Group},
+                },
+            })
+        }
+        rep.Embedded = map[string][]hyper.Representation{
+            "options": optionReps,
+        }
+    }
+
+    return rep
 }
 ```
 
-Each settings section is a distinct `Kind` (`"settings-general"`, `"settings-reading"`, etc.) so the `htmlc` codec can render section-specific templates. The nav `Links` create a tab bar — each tab is a navigational link to another settings page. The `Meta["current_section"]` tells the template which tab to highlight.
+Each setting is a `Kind: "setting"` so the `htmlc` codec can render a uniform template. The `section` state field allows the template to group settings into tabs — the settings list page can render identically to the previous tabbed UI by iterating over embedded items and grouping by section. The key difference is that each setting is independently addressable and updatable.
 
-The `front_page_id` and `custom_structure` fields are conditionally relevant — `front_page_id` only matters when `front_page_type` is `"static_page"`, and `custom_structure` only when `permalink_structure` is `"custom"`. The spec does not have a native conditional visibility mechanism for fields; the `htmlc` template handles this with `x-show` or `hx-swap` driven by JavaScript that reads the controlling field's value. The `Help` text on each field documents the dependency.
+The `front_page_id` and `custom_structure` settings are conditionally relevant — `front_page_id` only matters when `front_page_type` is `"static_page"`, and `custom_structure` only when `permalink_structure` is `"custom"`. The `htmlc` template handles this with `x-show` or `hx-swap` driven by JavaScript that reads the controlling setting's value. The `Help` text on each setting documents the dependency.
 
-#### JSON Wire Format — General Settings with Validation Errors
+#### JSON Wire Format — Timezone Setting
+
+The timezone setting demonstrates how hierarchy is handled naturally through the `group` field on embedded option representations, rather than requiring nested `Option` values:
 
 ```json
 {
-  "kind": "settings-general",
-  "self": {"href": "/admin/settings/general"},
+  "kind": "setting",
+  "self": {"href": "/admin/settings/timezone"},
   "state": {
-    "section": "general"
+    "name": "timezone",
+    "label": "Timezone",
+    "section": "general",
+    "value": "America/New_York"
   },
-  "links": [
-    {"rel": "nav", "href": "/admin/settings/general", "title": "General"},
-    {"rel": "nav", "href": "/admin/settings/reading", "title": "Reading"},
-    {"rel": "nav", "href": "/admin/settings/writing", "title": "Writing"},
-    {"rel": "nav", "href": "/admin/settings/discussion", "title": "Discussion"},
-    {"rel": "nav", "href": "/admin/settings/permalink", "title": "Permalinks"}
-  ],
   "actions": [
     {
-      "name": "SaveSettings",
-      "rel": "save",
-      "method": "POST",
-      "href": "/admin/settings/general",
+      "name": "UpdateSetting",
+      "rel": "update",
+      "method": "PUT",
+      "href": "/admin/settings/timezone",
       "fields": [
-        {"name": "site_title", "type": "text", "label": "Site Title", "required": true, "value": "My Blog"},
-        {"name": "tagline", "type": "text", "label": "Tagline", "value": "Just another blog", "help": "In a few words, explain what this site is about."},
-        {"name": "site_url", "type": "url", "label": "Site Address (URL)", "required": true, "value": "https://myblog.example.com"},
-        {"name": "admin_email", "type": "email", "label": "Administration Email Address", "required": true, "value": "not-an-email", "error": "Please enter a valid email address"},
-        {"name": "timezone", "type": "select", "label": "Timezone", "value": "America/New_York", "options": [
-          {"value": "UTC", "label": "UTC+0"},
-          {"value": "America/New_York", "label": "Eastern Time (US & Canada)"},
-          {"value": "America/Chicago", "label": "Central Time (US & Canada)"},
-          {"value": "America/Denver", "label": "Mountain Time (US & Canada)"},
-          {"value": "America/Los_Angeles", "label": "Pacific Time (US & Canada)"},
-          {"value": "Europe/London", "label": "London"},
-          {"value": "Europe/Paris", "label": "Paris"},
-          {"value": "Europe/Berlin", "label": "Berlin"},
-          {"value": "Asia/Tokyo", "label": "Tokyo"},
-          {"value": "Asia/Shanghai", "label": "Shanghai"},
-          {"value": "Australia/Sydney", "label": "Sydney"}
-        ]},
-        {"name": "date_format", "type": "text", "label": "Date Format", "value": "January 2, 2006", "help": "e.g. January 2, 2006 or 2006-01-02"},
-        {"name": "time_format", "type": "text", "label": "Time Format", "value": "3:04 PM", "help": "e.g. 3:04 PM or 15:04"},
-        {"name": "language", "type": "select", "label": "Site Language", "value": "en_US", "options": [
-          {"value": "en_US", "label": "English (United States)"},
-          {"value": "en_GB", "label": "English (UK)"},
-          {"value": "es_ES", "label": "Spanish"},
-          {"value": "fr_FR", "label": "French"},
-          {"value": "de_DE", "label": "German"},
-          {"value": "ja", "label": "Japanese"},
-          {"value": "zh_CN", "label": "Chinese (Simplified)"}
-        ]}
-      ],
-      "hints": {"hx-post": "/admin/settings/general", "hx-target": "#settings-form", "hx-swap": "outerHTML"}
+        {"name": "value", "type": "select", "label": "Timezone", "value": "America/New_York"}
+      ]
     }
   ],
-  "meta": {"current_section": "general"}
+  "embedded": {
+    "options": [
+      {"kind": "setting-option", "state": {"value": "UTC", "label": "UTC+0", "group": "UTC"}},
+      {"kind": "setting-option", "state": {"value": "America/New_York", "label": "Eastern Time (US & Canada)", "group": "Americas"}},
+      {"kind": "setting-option", "state": {"value": "America/Chicago", "label": "Central Time (US & Canada)", "group": "Americas"}},
+      {"kind": "setting-option", "state": {"value": "America/Denver", "label": "Mountain Time (US & Canada)", "group": "Americas"}},
+      {"kind": "setting-option", "state": {"value": "America/Los_Angeles", "label": "Pacific Time (US & Canada)", "group": "Americas"}},
+      {"kind": "setting-option", "state": {"value": "Europe/London", "label": "London", "group": "Europe"}},
+      {"kind": "setting-option", "state": {"value": "Europe/Paris", "label": "Paris", "group": "Europe"}},
+      {"kind": "setting-option", "state": {"value": "Europe/Berlin", "label": "Berlin", "group": "Europe"}},
+      {"kind": "setting-option", "state": {"value": "Asia/Tokyo", "label": "Tokyo", "group": "Asia/Pacific"}},
+      {"kind": "setting-option", "state": {"value": "Asia/Shanghai", "label": "Shanghai", "group": "Asia/Pacific"}},
+      {"kind": "setting-option", "state": {"value": "Australia/Sydney", "label": "Sydney", "group": "Asia/Pacific"}}
+    ]
+  }
 }
 ```
 
-The `admin_email` field has both `value: "not-an-email"` (the rejected input) and `error: "Please enter a valid email address"` (the validation message). The `htmlc` template renders this as a red-bordered input with the error message below it. All other fields retain their submitted values so the user does not lose their work — this is the standard `WithErrors` pattern (§3.2).
+The `group` field on each option representation provides the hierarchical grouping that §16.5 identified as missing from the `Option` type. An HTML codec can render grouped options using `<optgroup>` by reading the `group` state field. A CLI client can display them as sections. No changes to the core `Option` type are needed — hierarchy is expressed through resource structure rather than type nesting.
 
 ## 13. Bulk Post Operations (Interaction 12)
 
@@ -5993,33 +6004,26 @@ This works well for runtime behavior — the client always knows its options. Bu
 
 This would be informational only and would not change the action-driven behavior. **Severity: Low** — the current approach is idiomatic and the state machine is implicit but correct.
 
-### 16.5 Hierarchical Select Options
+### 16.5 Hierarchical Select Options — Resolved
 
-**Gap.** Categories and pages have parent-child hierarchies. The `Option` type (§10.2) has `Value`, `Label`, and `Selected` but no way to express nesting. In the WordPress admin, the category selector shows indented options:
+**Original gap.** The `Option` type (§10.2) has `Value`, `Label`, and `Selected` but no way to express nesting. Categories and pages have parent-child hierarchies, and settings like timezone have regional groupings. The original workaround used flat `Option` slices with manually indented labels (e.g., `"\u00a0\u00a0— Getting Started"`), which is fragile and semantically lossy.
 
-```
-Tutorials
-  — Getting Started
-  — Advanced Topics
-News
-Opinion
-  — Book Reviews
-```
-
-This document uses flat `Option` slices with manually indented labels (e.g., `"\u00a0\u00a0— Getting Started"`), which is fragile and semantically lossy.
-
-**Suggestion:** Add an optional `Children []Option` field to `Option` to support nested hierarchies, or add a `Depth int` field to indicate nesting level. The `Children` approach is more expressive:
+**Resolution.** The settings refactoring in §12 demonstrates how to sidestep this gap entirely through resource modelling. Instead of adding nested `Option` types, enumerated settings embed their available choices as `setting-option` representations, each with a `group` state field that provides hierarchical grouping:
 
 ```go
-type Option struct {
-    Value    string
-    Label    string
-    Selected bool
-    Children []Option // Optional: nested sub-options (optgroup semantics)
+hyper.Representation{
+    Kind: "setting-option",
+    State: hyper.Object{
+        "value": hyper.Scalar{V: "America/New_York"},
+        "label": hyper.Scalar{V: "Eastern Time (US & Canada)"},
+        "group": hyper.Scalar{V: "Americas"},
+    },
 }
 ```
 
-HTML codecs could render this as `<optgroup>` elements or indented `<option>` elements. JSON codecs would serialize the tree structure. **Severity: Medium** — the workaround (indented labels) is lossy and does not round-trip cleanly through codecs.
+An HTML codec renders grouped options using `<optgroup>` by reading the `group` field. A CLI client displays them as sections. This pattern applies beyond settings — categories, pages, and any resource with hierarchical choices can use embedded representations with a `group` (or `parent`) field instead of nested `Option` values. For deeper hierarchies, the `group` field can contain a path (e.g., `"Americas/US/Eastern"`).
+
+No changes to the core `Option` type are needed. **Severity: Low** (downgraded from Medium) — the resource modelling pattern resolves the gap for settings and provides a reusable template for other hierarchical-choice scenarios.
 
 ### 16.6 Confirmation Dialogs with Additional Input
 
@@ -6082,13 +6086,13 @@ Field{
 
 This is a complex UI pattern that may be too specific for the core spec. The `Hints`-based approach keeps it out of the normative spec while providing a discoverable convention. **Severity: Low** — the workaround is adequate for most cases, and a formal spec would need to cover many edge cases (multiple selection, preview rendering, etc.).
 
-### 16.10 Settings as Non-Collection Resources
+### 16.10 Settings as a Collection of Individual Resources
 
-**Observation.** Settings (§12) do not have IDs or collection semantics. They are singleton resources — there is exactly one "general settings" page, and it does not belong to a collection. The spec does not distinguish between singleton resources and collection members.
+**Observation.** Settings (§12) are now modelled as a collection of individually addressable resources. Each setting (e.g., `timezone`, `site_title`) is its own resource at `/admin/settings/{name}` with `GET` and `PUT`. The collection endpoint (`GET /admin/settings`) lists all settings as embedded representations.
 
-In practice, this distinction does not cause problems: a singleton resource is just a `Representation` without collection-related links or actions. But it is worth noting that the spec's examples and documentation tend to assume collection/member patterns (list + detail), and settings-style singletons are an equally valid use case.
+This resolves the earlier singleton-vs-collection question: the settings *page* is a collection, and each *setting* is a member resource. The `htmlc` template can still render the collection as a tabbed form identical to the previous UX — each section tab shows its member settings, each setting renders as a form field. The resource model is an API concern; the rendered HTML can look the same.
 
-**Suggestion:** Add a non-normative note or example in the spec showing singleton resource patterns. No structural changes needed — the existing model handles singletons naturally. **Severity: Low** — the spec works correctly for singletons; only documentation is missing.
+This pattern also demonstrates that the spec handles both collection members with IDs (posts, users) and collection members keyed by name (settings) equally well. **Severity: Low** — the spec works correctly for both patterns; the settings refactoring provides a concrete example of name-keyed collections.
 
 ### 16.11 Drag-and-Drop Reorder
 
@@ -6117,10 +6121,10 @@ This would be non-normative guidance for codec implementors. **Severity: Low** �
 | 16.2 | Conditional Action Visibility — no declarative mechanism | Low | §7 Action | Open — workaround is idiomatic |
 | 16.3 | File Upload Fields — no `Accept`/`MaxSize` on Field | Medium | §10.1 Field | Resolved — added `Accept`, `MaxSize`, `Multiple` fields to `Field` struct |
 | 16.4 | Multi-Step Workflows / State Machines — no graph declaration | Low | §7 Action | Open — informational only |
-| 16.5 | Hierarchical Select Options — no nested Options | Medium | §10.2 Option | Open |
+| 16.5 | Hierarchical Select Options — resolved via resource modelling | Low | §12 Settings | Resolved — options as embedded resources with group field |
 | 16.6 | Confirmation Dialogs with Additional Input — no action chaining | Medium | §7 Action | Open — document pattern |
 | 16.7 | Bulk Action Result Reporting — no Meta convention | Medium | §13 Bulk Operations | Resolved — bulk actions modelled as resources |
 | 16.8 | Content Negotiation for Uploads — Consumes/Field interplay | Low | §7.3 Consumes | Open — documentation only |
 | 16.9 | Cross-Resource References in Forms — no resource-picker type | Low | §10.1 Field | Open |
-| 16.10 | Settings as Non-Collection Resources — no singleton pattern | Low | §4 Representation | Open — documentation only |
+| 16.10 | Settings as Collection of Individual Resources — name-keyed members | Low | §12 Settings | Resolved — settings modelled as collection |
 | 16.11 | Drag-and-Drop Reorder — no sortable hint convention | Low | §11.4 Hints | Open |
