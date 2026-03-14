@@ -608,6 +608,9 @@ type Field struct {
     Help     string
     Options  []Option
     Error    string
+    Accept   string   // Accepted MIME types (file upload fields)
+    MaxSize  int64    // Maximum file size in bytes
+    Multiple bool     // Whether the field accepts multiple files
 }
 
 type Option struct {
@@ -623,6 +626,16 @@ type Option struct {
 - `Type` SHOULD identify the intended input control type
 - `Error` MAY contain a validation message from a failed submission
 - `Options` MAY describe enumerated choices
+- `Accept` MAY specify accepted MIME types for file upload fields (e.g., `"image/png, image/jpeg"`)
+- `MaxSize` MAY specify the maximum file size in bytes for file upload fields
+- `Multiple` MAY indicate that the field accepts multiple files
+
+#### File Upload Fields
+
+When `Type` is `"file"`, the `Accept`, `MaxSize`, and `Multiple` fields
+provide additional constraints for file uploads. Codecs SHOULD encode these
+fields when present and non-zero. Codecs SHALL decode these fields when
+present in the wire format.
 
 #### Multi-Value Semantics
 
@@ -661,6 +674,7 @@ codecs and non-HTML clients (CLI tools, mobile apps) can interpret:
 | `checkbox` | Boolean toggle                               |
 | `checkbox-group` | Multiple selections from `Options`; each selected option contributes a value |
 | `multiselect` | Selection of multiple values from `Options` (rendered as a multi-select list or similar) |
+| `file`   | File upload input; see `Accept`, `MaxSize`, `Multiple` |
 
 The `checkbox-group` and `multiselect` types indicate that the field accepts
 zero or more values. Codecs SHOULD render `checkbox-group` as a group of

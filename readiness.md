@@ -163,36 +163,14 @@ an empty string. This ensures malformed hrefs are caught at encode time.
 
 #### D10 — Spec §7.3 Field definition doesn't include Accept/MaxSize/Multiple (implementation is ahead)
 
+**Status: Resolved**
+
 **File:** `hyper.go`, `Field` struct (line ~80) vs `spec.md` §7.3
 
-**Spec definition (§7.3):**
-```go
-type Field struct {
-    Name, Type, Label, Help, Error string
-    Value    any
-    Required bool
-    ReadOnly bool
-    Options  []Option
-}
-```
-
-**Implementation:**
-```go
-type Field struct {
-    // ...all spec fields, plus:
-    Accept   string  // Accepted MIME types (file fields)
-    MaxSize  int64   // Maximum file size in bytes
-    Multiple bool    // Whether field accepts multiple files
-}
-```
-
-**Impact:** The implementation is ahead of the spec. The extra fields are
-useful for file-upload fields but are not documented in the specification.
-The JSON encoder and decoder both handle these fields correctly.
-
-**Remediation:** Update §7.3 in `spec.md` to document `Accept`, `MaxSize`,
-and `Multiple` fields, or remove them from the implementation if they are
-not yet approved.
+**Resolution:** Updated §7.3 in `spec.md` to document the `Accept`,
+`MaxSize`, and `Multiple` fields for file-upload support, aligning the
+spec with the existing implementation. Added a "File Upload Fields"
+subsection and a `file` entry to the recommended type vocabulary table.
 
 ---
 
@@ -236,7 +214,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |
 | D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
 | D7  | §8.2.1  | Minor          | Resolved        | Error on unresolved Route targets without Resolver |
-| D10 | §7.3    | Minor (spec)   | Impl ahead      | Field has undocumented Accept/MaxSize/Multiple     |
+| D10 | §7.3    | Minor (spec)   | Resolved        | Field Accept/MaxSize/Multiple now documented in spec |
 | D9  | §18.3   | Minor (spec)   | Resolved        | Nil-map panic in example code                     |
 
 ## Recommended Priority
