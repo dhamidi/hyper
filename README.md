@@ -94,8 +94,9 @@ integration pattern with hyper's `RepresentationCodec`.
 
 ### Task List
 
-A task list web app demonstrating the built-in HTML codec with a
-typewriter-inspired design, htmx integration, and content negotiation.
+A task list web app demonstrating a custom `RepresentationCodec` backed by
+`htmlc` for HTML rendering, with htmx integration and content negotiation.
+Both HTML and JSON responses are driven through `hyper.Renderer`.
 
 ```bash
 cd examples/tasklist

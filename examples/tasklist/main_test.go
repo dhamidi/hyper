@@ -42,6 +42,29 @@ func doReq(t *testing.T, method, url, accept, body string) *http.Response {
 	return resp
 }
 
+func doReqWithHeaders(t *testing.T, method, url string, headers map[string]string, body string) *http.Response {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	defer resp.Body.Close()
@@ -222,5 +245,49 @@ func TestContentNegotiation(t *testing.T) {
 	readBody(t, respJSON)
 	if ct := respJSON.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Errorf("JSON: got content-type %q", ct)
+	}
+}
+
+func TestHTMXFragment(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "GET", srv.URL+"/", map[string]string{
+		"Accept":     "text/html",
+		"HX-Request": "true",
+	}, "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(body, "<!DOCTYPE") {
+		t.Error("htmx fragment response should not contain DOCTYPE")
+	}
+	if !strings.Contains(body, "<article") {
+		t.Error("htmx fragment response should contain task articles")
+	}
+}
+
+func TestToggleTask_HTMLFragment(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "POST", srv.URL+"/tasks/1/toggle", map[string]string{
+		"Accept":     "text/html",
+		"HX-Request": "true",
+	}, "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		t.Fatalf("got content-type %q, want text/html", ct)
+	}
+	if strings.Contains(body, "<!DOCTYPE") {
+		t.Error("htmx fragment should not contain DOCTYPE")
+	}
+	if !strings.Contains(body, "done") {
+		t.Error("toggled task should show status 'done'")
 	}
 }

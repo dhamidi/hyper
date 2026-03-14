@@ -1,15 +1,17 @@
 <template>
-  <form method="POST" action="/tasks">
-    <h2>create</h2>
-    <label>Title
-      <input type="text" name="title" :value="titleValue" required>
-      <em v-if="titleError">{{ titleError }}</em>
-    </label>
-    <label>Status
-      <select name="status">
-        <option v-for="opt in statusOptions" :value="opt.value" :selected="opt.selected">{{ opt.label }}</option>
-      </select>
-    </label>
-    <button type="submit">create</button>
+  <form method="POST" :action="href">
+    <h2>{{ name }}</h2>
+    <template v-for="field in fields">
+      <label v-if="field.type !== 'hidden' && field.type !== 'select'">{{ field.label }}
+        <input :type="field.type" :name="field.name" :value="field.value" :required="field.required">
+        <em v-if="field.error">{{ field.error }}</em>
+      </label>
+      <label v-if="field.type === 'select'">{{ field.label }}
+        <select :name="field.name">
+          <option v-for="opt in field.options" :value="opt.value" :selected="opt.selected">{{ opt.label }}</option>
+        </select>
+      </label>
+    </template>
+    <button type="submit">{{ name }}</button>
   </form>
 </template>

@@ -1,11 +1,13 @@
 // Command tasklist is a task list web app demonstrating the hyper library
 // with htmlc Vue SFC templates for HTML rendering and hyper's JSON codec
-// for the API.
+// for the API. HTML and JSON responses are both driven through
+// hyper.Renderer with a custom RepresentationCodec backed by htmlc.
 package main
 
 import (
-	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -145,7 +147,7 @@ func taskListRep(store *TaskStore) hyper.Representation {
 	return hyper.Representation{
 		Kind:  "task-list",
 		Self:  hyper.Path().Ptr(),
-		State: hyper.StateFrom("taskCount", len(tasks)),
+		State: hyper.StateFrom("taskCount", len(tasks), "noTasks", len(tasks) == 0),
 		Links: []hyper.Link{
 			hyper.NewLink("self", hyper.Path()),
 		},
@@ -174,45 +176,185 @@ func taskListRep(store *TaskStore) hyper.Representation {
 	}
 }
 
-// taskScope converts a Task into a scope map for htmlc templates.
-func taskScope(t Task) map[string]any {
-	return map[string]any{
-		"title":  t.Title,
-		"status": t.Status,
-		"toggleAction": fmt.Sprintf("/tasks/%d/toggle", t.ID),
-		"toggleHints": map[string]any{
-			"hx-post":   fmt.Sprintf("/tasks/%d/toggle", t.ID),
-			"hx-target": "closest article",
-			"hx-swap":   "outerHTML",
-		},
-		"deleteAction": fmt.Sprintf("/tasks/%d", t.ID),
-		"deleteHints": map[string]any{
-			"hx-delete": fmt.Sprintf("/tasks/%d", t.ID),
-			"hx-target": "closest article",
-			"hx-swap":   "outerHTML",
-		},
-	}
+// htmlcCodec implements hyper.RepresentationCodec using an htmlc template engine.
+// It maps Representation.Kind to a Vue SFC component name and converts the
+// representation into a template scope via representationToScope.
+type htmlcCodec struct {
+	engine *htmlc.Engine
 }
 
-// taskListScope builds a scope map for the page template from store data.
-func taskListScope(store *TaskStore, titleValue, titleError string) map[string]any {
-	tasks := store.All()
-	items := make([]map[string]any, len(tasks))
-	for i, t := range tasks {
-		items[i] = taskScope(t)
+func (c htmlcCodec) MediaTypes() []string {
+	return []string{"text/html"}
+}
+
+func (c htmlcCodec) Encode(ctx context.Context, w io.Writer, rep hyper.Representation, opts hyper.EncodeOptions) error {
+	component := rep.Kind
+	if component == "" {
+		component = "default"
 	}
-	return map[string]any{
-		"tasks":   items,
-		"noTasks": len(tasks) == 0,
-		"createAction": map[string]any{
-			"titleValue": titleValue,
-			"titleError": titleError,
-			"statusOptions": []map[string]any{
-				{"value": "pending", "label": "Pending", "selected": true},
-				{"value": "done", "label": "Done", "selected": false},
-			},
-		},
+	scope := representationToScope(ctx, rep, opts)
+	if opts.Mode == hyper.RenderFragment {
+		return c.engine.RenderFragment(w, component, scope)
 	}
+	return c.engine.RenderPage(w, component, scope)
+}
+
+// representationToScope converts a hyper.Representation into a flat
+// map[string]any scope suitable for htmlc templates. State fields are
+// promoted to top-level keys, actions and links are keyed by name/rel,
+// and embedded slots are recursively converted.
+func representationToScope(ctx context.Context, rep hyper.Representation, opts hyper.EncodeOptions) map[string]any {
+	scope := map[string]any{
+		"kind": rep.Kind,
+	}
+
+	// Self href
+	if rep.Self != nil {
+		if href := resolveHref(ctx, *rep.Self, opts.Resolver); href != "" {
+			scope["selfHref"] = href
+		}
+	}
+
+	// State: Object → flat key/value pairs
+	if obj, ok := rep.State.(hyper.Object); ok {
+		for k, v := range obj {
+			switch val := v.(type) {
+			case hyper.Scalar:
+				scope[k] = val.V
+			case hyper.RichText:
+				scope[k] = map[string]any{
+					"mediaType": val.MediaType,
+					"source":    val.Source,
+				}
+			}
+		}
+	}
+
+	// Links → map keyed by Rel
+	if len(rep.Links) > 0 {
+		links := make(map[string]any, len(rep.Links))
+		for _, l := range rep.Links {
+			entry := map[string]any{
+				"rel":   l.Rel,
+				"title": l.Title,
+			}
+			if href := resolveHref(ctx, l.Target, opts.Resolver); href != "" {
+				entry["href"] = href
+			}
+			links[l.Rel] = entry
+		}
+		scope["links"] = links
+	}
+
+	// Actions → map keyed by Name (with Rel override)
+	if len(rep.Actions) > 0 {
+		actions := make(map[string]any, len(rep.Actions))
+		actionList := make([]map[string]any, 0, len(rep.Actions))
+		for _, a := range rep.Actions {
+			key := a.Name
+			if a.Rel != "" {
+				key = a.Rel
+			}
+			actionScope := map[string]any{
+				"name":   a.Name,
+				"method": a.Method,
+			}
+			if href := resolveHref(ctx, a.Target, opts.Resolver); href != "" {
+				actionScope["href"] = href
+			}
+			if len(a.Fields) > 0 {
+				actionScope["fields"] = fieldsToScope(a.Fields)
+			}
+			if len(a.Hints) > 0 {
+				actionScope["hints"] = a.Hints
+				hxAttrs := make(map[string]any)
+				for k, v := range a.Hints {
+					if strings.HasPrefix(k, "hx-") {
+						hxAttrs[k] = v
+					}
+				}
+				if len(hxAttrs) > 0 {
+					actionScope["hxAttrs"] = hxAttrs
+				}
+			}
+			actions[key] = actionScope
+			actionList = append(actionList, actionScope)
+		}
+		scope["actions"] = actions
+		scope["actionList"] = actionList
+	}
+
+	// Embedded → map keyed by slot name
+	if len(rep.Embedded) > 0 {
+		embedded := make(map[string]any, len(rep.Embedded))
+		for slot, reps := range rep.Embedded {
+			items := make([]map[string]any, len(reps))
+			for i, sub := range reps {
+				items[i] = representationToScope(ctx, sub, opts)
+			}
+			embedded[slot] = items
+		}
+		scope["embedded"] = embedded
+	}
+
+	return scope
+}
+
+// fieldsToScope converts hyper.Field slices into template-friendly maps.
+func fieldsToScope(fields []hyper.Field) []map[string]any {
+	result := make([]map[string]any, len(fields))
+	for i, f := range fields {
+		m := map[string]any{
+			"name":     f.Name,
+			"type":     f.Type,
+			"required": f.Required,
+		}
+		if f.Value != nil {
+			m["value"] = f.Value
+		}
+		if f.Label != "" {
+			m["label"] = f.Label
+		}
+		if f.Error != "" {
+			m["error"] = f.Error
+		}
+		if len(f.Options) > 0 {
+			opts := make([]map[string]any, len(f.Options))
+			for j, o := range f.Options {
+				opts[j] = map[string]any{
+					"value":    o.Value,
+					"label":    o.Label,
+					"selected": o.Selected,
+				}
+			}
+			m["options"] = opts
+		}
+		result[i] = m
+	}
+	return result
+}
+
+// resolveHref resolves a Target to a URL string, falling back to the
+// target's direct URL when no Resolver is available.
+func resolveHref(ctx context.Context, t hyper.Target, resolver hyper.Resolver) string {
+	if resolver != nil {
+		if u, err := resolver.ResolveTarget(ctx, t); err == nil {
+			return u.String()
+		}
+	}
+	if t.URL != nil {
+		return t.URL.String()
+	}
+	return ""
+}
+
+// renderMode returns RenderFragment for htmx partial requests (indicated
+// by the HX-Request header) and RenderDocument for full page loads.
+func renderMode(r *http.Request) hyper.RenderMode {
+	if r.Header.Get("HX-Request") == "true" {
+		return hyper.RenderFragment
+	}
+	return hyper.RenderDocument
 }
 
 // newMux creates the HTTP handler with all routes.
@@ -224,6 +366,7 @@ func newMux(store *TaskStore) http.Handler {
 
 	renderer := hyper.Renderer{
 		Codecs: []hyper.RepresentationCodec{
+			htmlcCodec{engine: engine},
 			hyper.JSONCodec(),
 		},
 	}
@@ -235,12 +378,7 @@ func newMux(store *TaskStore) http.Handler {
 	})
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if wantsHTML(r) {
-			scope := taskListScope(store, "", "")
-			writeHTMLDocument(w, engine, http.StatusOK, "page", scope)
-			return
-		}
-		renderer.Respond(w, r, http.StatusOK, taskListRep(store))
+		renderer.RespondWithMode(w, r, http.StatusOK, taskListRep(store), renderMode(r))
 	})
 
 	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
@@ -250,11 +388,6 @@ func newMux(store *TaskStore) http.Handler {
 		}
 		title := strings.TrimSpace(r.FormValue("title"))
 		if title == "" {
-			if wantsHTML(r) {
-				scope := taskListScope(store, r.FormValue("title"), "Title is required")
-				writeHTMLDocument(w, engine, http.StatusUnprocessableEntity, "page", scope)
-				return
-			}
 			rep := taskListRep(store)
 			for i, a := range rep.Actions {
 				if a.Name == "create" {
@@ -266,7 +399,7 @@ func newMux(store *TaskStore) http.Handler {
 					break
 				}
 			}
-			renderer.Respond(w, r, http.StatusUnprocessableEntity, rep)
+			renderer.RespondWithMode(w, r, http.StatusUnprocessableEntity, rep, renderMode(r))
 			return
 		}
 
@@ -280,7 +413,7 @@ func newMux(store *TaskStore) http.Handler {
 			t.Status = "done"
 		}
 
-		if wantsHTML(r) {
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
@@ -298,14 +431,7 @@ func newMux(store *TaskStore) http.Handler {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		if wantsHTML(r) {
-			scope := taskScope(t)
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			engine.RenderFragment(w, "task-item", scope)
-			return
-		}
-		renderer.Respond(w, r, http.StatusOK, taskRep(t))
+		renderer.RespondWithMode(w, r, http.StatusOK, taskRep(t), renderMode(r))
 	})
 
 	mux.HandleFunc("DELETE /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -318,7 +444,7 @@ func newMux(store *TaskStore) http.Handler {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		if wantsHTML(r) {
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -326,37 +452,6 @@ func newMux(store *TaskStore) http.Handler {
 	})
 
 	return methodoverride.Wrap(mux)
-}
-
-// wantsHTML returns true if the request Accept header prefers text/html.
-func wantsHTML(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return strings.Contains(accept, "text/html")
-}
-
-// writeHTMLDocument renders a full HTML page with custom head (CSS + htmx),
-// delegating the body content to the htmlc engine.
-func writeHTMLDocument(w http.ResponseWriter, engine *htmlc.Engine, status int, component string, scope map[string]any) {
-	var buf bytes.Buffer
-	engine.RenderFragment(&buf, component, scope)
-
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(status)
-	fmt.Fprint(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Task List</title>
-<link rel="stylesheet" href="/style.css">
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-</head>
-<body>
-`)
-	w.Write(buf.Bytes())
-	fmt.Fprint(w, `</body>
-</html>
-`)
 }
 
 func main() {

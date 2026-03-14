@@ -1,6 +1,6 @@
 # examples/tasklist
 
-A task list web app demonstrating the hyper library with htmlc Vue SFC templates for HTML rendering and hyper's JSON codec for the API.
+A task list web app demonstrating the hyper library with a custom RepresentationCodec backed by htmlc Vue SFC templates. Both HTML and JSON responses go through hyper.Renderer with content negotiation.
 
 ## Running
 
