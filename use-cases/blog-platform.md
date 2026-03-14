@@ -55,7 +55,8 @@ router.Scope(func(admin *dispatch.Scope) {
         posts.POST("trash",     "/{id}/trash",  http.HandlerFunc(handleTrashPost))
         posts.POST("restore",   "/{id}/restore",   http.HandlerFunc(handleRestorePost))
         posts.GET("revisions",  "/{id}/revisions", http.HandlerFunc(handlePostRevisions))
-        posts.POST("bulk",      "/bulk",            http.HandlerFunc(handleBulkPostAction))
+        posts.POST("bulk.preview", "/bulk/preview", http.HandlerFunc(handleBulkPostPreview))
+        posts.POST("bulk.confirm", "/bulk/confirm", http.HandlerFunc(handleBulkPostConfirm))
         posts.GET("bulk.show",  "/bulk/{batch_id}", http.HandlerFunc(handleBulkPostResult))
     }, dispatch.WithNamePrefix("posts"), dispatch.WithTemplatePrefix("/posts"))
 
@@ -101,10 +102,11 @@ router.Scope(func(admin *dispatch.Scope) {
         c.POST("spam",    "/{id}/spam",     http.HandlerFunc(handleSpamComment))
         c.POST("trash",   "/{id}/trash",    http.HandlerFunc(handleTrashComment))
         c.POST("reply",   "/{id}/reply",    http.HandlerFunc(handleReplyComment))
-        c.POST("bulk",    "/bulk",          http.HandlerFunc(handleCommentBulkAction))
+        c.POST("bulk.preview", "/bulk/preview", http.HandlerFunc(handleCommentBulkPreview))
+        c.POST("bulk.confirm", "/bulk/confirm", http.HandlerFunc(handleCommentBulkConfirm))
     }, dispatch.WithNamePrefix("comments"), dispatch.WithTemplatePrefix("/comments"))
 
-    // Media — standard CRUD via Resource helper plus bulk delete
+    // Media — standard CRUD via Resource helper plus bulk delete workflow
     admin.Scope(func(m *dispatch.Scope) {
         dispatch.Resource(m, "media", MediaHandler{})
         // Registers: media.index (GET /), media.create (POST /),
@@ -112,7 +114,8 @@ router.Scope(func(admin *dispatch.Scope) {
         //            media.destroy (DELETE /{id})
 
         // Additional actions
-        m.DELETE("bulk", "/bulk", http.HandlerFunc(handleMediaBulkDelete))
+        m.POST("bulk.preview", "/bulk/preview", http.HandlerFunc(handleMediaBulkDeletePreview))
+        m.POST("bulk.confirm", "/bulk/confirm", http.HandlerFunc(handleMediaBulkDeleteConfirm))
     }, dispatch.WithNamePrefix("media"), dispatch.WithTemplatePrefix("/media"))
 
     // Users — standard CRUD via Resource helper
@@ -1220,7 +1223,7 @@ func postListRepresentation(posts []Post, filters PostFilters, statusCounts map[
                 Name:   "BulkAction",
                 Rel:    "bulk",
                 Method: "POST",
-                Target: hyper.Route("posts.bulk"),
+                Target: hyper.Route("posts.bulk.preview"),
                 Fields: []hyper.Field{
                     {
                         Name:  "selected_post_ids",
@@ -1242,9 +1245,9 @@ func postListRepresentation(posts []Post, filters PostFilters, statusCounts map[
                 },
                 Hints: map[string]any{
                     "hx-post":    "",
-                    "hx-target":  "#post-table-body",
-                    "hx-swap":    "innerHTML",
-                    "hx-confirm": "Apply this action to the selected posts?",
+                    "hx-target":  "#bulk-dialog",
+                    "hx-swap":    "outerHTML",
+                    "dialog":     "bulk-preview",
                 },
             },
         },
@@ -1331,7 +1334,7 @@ The status filter tabs are navigational links rather than actions — they do no
       "name": "BulkAction",
       "rel": "bulk",
       "method": "POST",
-      "href": "/admin/posts/bulk",
+      "href": "/admin/posts/bulk/preview",
       "fields": [
         {"name": "selected_post_ids", "type": "checkbox-group", "label": "Selected Posts"},
         {"name": "action", "type": "select", "label": "Bulk Action", "options": [
@@ -1343,10 +1346,10 @@ The status filter tabs are navigational links rather than actions — they do no
         ]}
       ],
       "hints": {
-        "hx-post": "/admin/posts/bulk",
-        "hx-target": "#post-table-body",
-        "hx-swap": "innerHTML",
-        "hx-confirm": "Apply this action to the selected posts?"
+        "hx-post": "/admin/posts/bulk/preview",
+        "hx-target": "#bulk-dialog",
+        "hx-swap": "outerHTML",
+        "dialog": "bulk-preview"
       }
     }
   ],
@@ -3152,7 +3155,7 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
                 Name:   "BulkAction",
                 Rel:    "bulk",
                 Method: "POST",
-                Target: hyper.Route("comments.bulk"),
+                Target: hyper.Route("comments.bulk.preview"),
                 Fields: []hyper.Field{
                     {
                         Name:  "selected_comment_ids",
@@ -3174,9 +3177,9 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
                 },
                 Hints: map[string]any{
                     "hx-post":    "",
-                    "hx-target":  "#comment-list-body",
-                    "hx-swap":    "innerHTML",
-                    "hx-confirm": "Apply this action to the selected comments?",
+                    "hx-target":  "#bulk-dialog",
+                    "hx-swap":    "outerHTML",
+                    "dialog":     "bulk-preview",
                 },
             },
             {
@@ -3208,49 +3211,26 @@ func commentListRepresentation(comments []Comment, statusCounts map[string]int, 
 }
 ```
 
-#### Handler — Bulk Approve Comments
+#### Handler — Bulk Comment Preview
 
 ```go
-func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
-    action := r.FormValue("action")
-    commentIDs := r.Form["selected_comment_ids"]
-
-    if len(commentIDs) == 0 || action == "" {
-        http.Error(w, "No comments selected or no action specified", http.StatusBadRequest)
+func handleCommentBulkPreview(w http.ResponseWriter, r *http.Request) {
+    var input struct {
+        SelectedCommentIDs []int  `form:"selected_comment_ids"`
+        Action             string `form:"action"`
+    }
+    if err := decode(r, &input); err != nil {
+        renderError(w, r, http.StatusBadRequest, "Invalid input")
         return
     }
 
-    var results []ItemResult
-    for _, idStr := range commentIDs {
-        id, err := strconv.Atoi(idStr)
-        if err != nil {
-            continue
-        }
-
-        var opErr error
-        switch action {
-        case "approve":
-            opErr = store.UpdateCommentStatus(id, ModerationApproved)
-        case "spam":
-            opErr = store.UpdateCommentStatus(id, ModerationSpam)
-        case "trash":
-            opErr = store.UpdateCommentStatus(id, ModerationTrashed)
-        case "delete":
-            opErr = store.DeleteComment(id)
-        }
-
-        if opErr != nil {
-            results = append(results, ItemResult{ID: id, Status: "error", Error: opErr.Error()})
-        } else {
-            results = append(results, ItemResult{ID: id, Status: "success"})
-        }
+    preview, err := buildBulkCommentPreview(input.SelectedCommentIDs, input.Action, currentUser(r))
+    if err != nil {
+        renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+        return
     }
 
-    // Return a bulk-action-result representation with per-item results
-    batchID := generateBatchID()
-    rep := bulkActionResultRepresentation(batchID, action, results, hyper.Route("comments.list"))
-
-    render(w, r, rep, http.StatusOK)
+    render(w, r, preview, http.StatusOK)
 }
 ```
 
@@ -3284,7 +3264,7 @@ func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
       "name": "BulkAction",
       "rel": "bulk",
       "method": "POST",
-      "href": "/admin/comments/bulk",
+      "href": "/admin/comments/bulk/preview",
       "fields": [
         {"name": "selected_comment_ids", "type": "checkbox-group", "label": "Selected Comments"},
         {"name": "action", "type": "select", "label": "Bulk Action", "options": [
@@ -3295,7 +3275,7 @@ func handleCommentBulkAction(w http.ResponseWriter, r *http.Request) {
           {"value": "delete", "label": "Delete Permanently"}
         ]}
       ],
-      "hints": {"hx-post": "/admin/comments/bulk", "hx-target": "#comment-list-body", "hx-swap": "innerHTML", "hx-confirm": "Apply this action to the selected comments?"}
+      "hints": {"hx-post": "/admin/comments/bulk/preview", "hx-target": "#bulk-dialog", "hx-swap": "outerHTML", "dialog": "bulk-preview"}
     },
     {
       "name": "Search",
@@ -3487,22 +3467,21 @@ func mediaListRepresentation(items []Media, viewMode string) hyper.Representatio
             {
                 Name:   "BulkDelete",
                 Rel:    "bulk-delete",
-                Method: "DELETE",
-                Target: hyper.Route("media.bulk"),
+                Method: "POST",
+                Target: hyper.Route("media.bulk.preview"),
                 Fields: []hyper.Field{
-                    {Name: "_method", Type: "hidden", Value: hyper.Scalar{V: "DELETE"}},
                     {
                         Name:  "selected_media_ids",
                         Type:  "checkbox-group",
                         Label: "Selected Media",
                     },
+                    {Name: "action", Type: "hidden", Value: "delete"},
                 },
                 Hints: map[string]any{
-                    "hx-delete":  "",
-                    "hx-target":  "#media-grid",
-                    "hx-swap":    "innerHTML",
-                    "hx-confirm": "Delete selected media files? This cannot be undone.",
-                    "destructive": true,
+                    "hx-post":   "",
+                    "hx-target": "#bulk-dialog",
+                    "hx-swap":   "outerHTML",
+                    "dialog":    "bulk-preview",
                 },
             },
             {
@@ -3731,13 +3710,13 @@ func handleMediaUpload(w http.ResponseWriter, r *http.Request) {
     {
       "name": "BulkDelete",
       "rel": "bulk-delete",
-      "method": "DELETE",
-      "href": "/admin/media/bulk",
+      "method": "POST",
+      "href": "/admin/media/bulk/preview",
       "fields": [
-        {"name": "_method", "type": "hidden", "value": "DELETE"},
-        {"name": "selected_media_ids", "type": "checkbox-group", "label": "Selected Media"}
+        {"name": "selected_media_ids", "type": "checkbox-group", "label": "Selected Media"},
+        {"name": "action", "type": "hidden", "value": "delete"}
       ],
-      "hints": {"hx-delete": "/admin/media/bulk", "hx-target": "#media-grid", "hx-swap": "innerHTML", "hx-confirm": "Delete selected media files? This cannot be undone.", "destructive": true}
+      "hints": {"hx-post": "/admin/media/bulk/preview", "hx-target": "#bulk-dialog", "hx-swap": "outerHTML", "dialog": "bulk-preview"}
     },
     {
       "name": "Search",
@@ -5161,14 +5140,22 @@ The `group` field on each option representation provides the hierarchical groupi
 
 ## 13. Bulk Post Operations (Interaction 12)
 
-Bulk actions allow an admin to publish, unpublish, trash, or permanently delete multiple posts at once. The `BulkAction` action is part of the `post-list` representation (§5.1) — it uses a `checkbox-group` field for selected post IDs and a `select` field for the action to apply.
+Bulk operations are modeled as a resource workflow, not a single form submit. This gives confirmation dialogs and retries first-class representations with their own links/actions.
 
-### 13.1 Bulk Action Handler
+### 13.1 Resource Graph
+
+For posts, bulk operations use three resources:
+
+- `bulk-action-preview` (`POST /admin/posts/bulk/preview`) — validates selection and shows projected impact before execution.
+- `confirmation-dialog` (embedded in preview) — dialog payload with confirm/cancel actions.
+- `bulk-action-result` (`GET /admin/posts/bulk/{batch_id}`) — persisted execution result.
+
+The same pattern is used for comments and media (`comments.bulk.preview` / `comments.bulk.confirm`, `media.bulk.preview` / `media.bulk.confirm`).
+
+### 13.2 Preview + Confirm Handlers
 
 ```go
-func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
-    currentUser := currentUser(r)
-
+func handleBulkPostPreview(w http.ResponseWriter, r *http.Request) {
     var input struct {
         SelectedPostIDs []int  `form:"selected_post_ids"`
         Action          string `form:"action"`
@@ -5178,218 +5165,175 @@ func handleBulkPostAction(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    if len(input.SelectedPostIDs) == 0 {
-        renderError(w, r, http.StatusUnprocessableEntity, "No posts selected")
+    preview, err := buildBulkPostPreview(input.SelectedPostIDs, input.Action, currentUser(r))
+    if err != nil {
+        renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+        return
+    }
+    render(w, r, preview, http.StatusOK)
+}
+
+func handleBulkPostConfirm(w http.ResponseWriter, r *http.Request) {
+    var input struct {
+        PreviewToken string `form:"preview_token"`
+    }
+    if err := decode(r, &input); err != nil || input.PreviewToken == "" {
+        renderError(w, r, http.StatusBadRequest, "Invalid confirmation payload")
         return
     }
 
-    validActions := map[string]bool{"publish": true, "draft": true, "trash": true, "delete": true}
-    if !validActions[input.Action] {
-        renderError(w, r, http.StatusUnprocessableEntity, fmt.Sprintf("Invalid bulk action: %s", input.Action))
+    plan, err := previewStore.Get(input.PreviewToken)
+    if err != nil {
+        renderError(w, r, http.StatusNotFound, "Bulk preview expired")
         return
     }
 
-    // Track per-item results
-    var results []ItemResult
-
-    for _, postID := range input.SelectedPostIDs {
-        post, err := postStore.Get(postID)
-        if err != nil {
-            results = append(results, ItemResult{ID: postID, Status: "error", Error: "Post not found"})
-            continue
-        }
-
-        var opErr error
-        switch input.Action {
-        case "publish":
-            if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to publish"})
-                continue
-            }
-            post.Status = PostStatusPublished
-            now := time.Now()
-            post.PublishedAt = &now
-            opErr = postStore.Update(post)
-
-        case "draft":
-            post.Status = PostStatusDraft
-            post.PublishedAt = nil
-            opErr = postStore.Update(post)
-
-        case "trash":
-            if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to trash"})
-                continue
-            }
-            post.Status = PostStatusTrashed
-            opErr = postStore.Update(post)
-
-        case "delete":
-            if roleLevels[string(currentUser.Role)] < roleLevels["editor"] {
-                results = append(results, ItemResult{ID: postID, Status: "error", Error: "Insufficient permissions to delete"})
-                continue
-            }
-            opErr = postStore.Delete(postID)
-        }
-
-        if opErr != nil {
-            results = append(results, ItemResult{ID: postID, Status: "error", Error: opErr.Error()})
-        } else {
-            results = append(results, ItemResult{ID: postID, Status: "success"})
-        }
-    }
-
-    // Generate a batch ID and return a bulk-action-result representation
+    results := executeBulkPostPlan(plan, currentUser(r))
     batchID := generateBatchID()
-    rep := bulkActionResultRepresentation(batchID, input.Action, results, hyper.Route("posts.list"))
-
+    rep := bulkActionResultRepresentation(batchID, plan.Action, results, hyper.Route("posts.list"))
     render(w, r, rep, http.StatusOK)
 }
 ```
 
-### 13.2 Request/Response Flow
+### 13.3 Preview Representation
 
-The bulk action flow works as follows:
+```go
+func bulkActionPreviewRepresentation(plan BulkPlan) hyper.Representation {
+    items := make([]hyper.Representation, len(plan.Items))
+    for i, item := range plan.Items {
+        items[i] = hyper.Representation{
+            Kind: "bulk-action-preview-item",
+            Self: hyper.Route("posts.show", "id", strconv.Itoa(item.PostID)).Ptr(),
+            State: hyper.StateFrom(
+                "post_id", item.PostID,
+                "title", item.Title,
+                "current_status", item.CurrentStatus,
+                "next_status", item.NextStatus,
+                "result", item.ValidationResult, // "ok", "blocked"
+                "reason", item.Reason,           // optional
+            ),
+        }
+    }
 
-1. **User selects posts** — Each post row has a checkbox. The `htmlc` template renders these as `<input type="checkbox" name="selected_post_ids" value="42">` based on the `BulkAction` action's `checkbox-group` field.
+    return hyper.Representation{
+        Kind: "bulk-action-preview",
+        Self: hyper.Route("posts.bulk.preview").Ptr(),
+        State: hyper.StateFrom(
+            "preview_token", plan.Token,
+            "action", plan.Action,
+            "selected_count", len(plan.Items),
+            "ready_count", plan.ReadyCount,
+            "blocked_count", plan.BlockedCount,
+            "requires_confirmation", plan.RequiresConfirmation,
+        ),
+        Actions: []hyper.Action{
+            {
+                Name:   "ConfirmBulkAction",
+                Method: "POST",
+                Target: hyper.Route("posts.bulk.confirm"),
+                Fields: []hyper.Field{
+                    {Name: "preview_token", Type: "hidden", Value: plan.Token},
+                },
+                Hints: map[string]any{
+                    "hx-post":   "",
+                    "hx-target": "#bulk-dialog",
+                    "hx-swap":   "outerHTML",
+                    "variant":   "danger",
+                },
+            },
+        },
+        Links: []hyper.Link{
+            {Rel: "cancel", Target: hyper.Route("posts.list"), Title: "Cancel"},
+            {Rel: "collection", Target: hyper.Route("posts.list"), Title: "Back to Posts"},
+        },
+        Embedded: map[string][]hyper.Representation{
+            "items": items,
+            "dialog": {
+                {
+                    Kind: "confirmation-dialog",
+                    State: hyper.StateFrom(
+                        "title", "Confirm bulk action",
+                        "message", fmt.Sprintf("Apply %q to %d selected posts?", plan.Action, len(plan.Items)),
+                        "severity", "warning",
+                    ),
+                },
+            },
+        },
+    }
+}
+```
 
-2. **User chooses action and submits** — The `select` field presents the bulk action options. The form POSTs to `/admin/posts/bulk` (the `posts.bulk` route).
+### 13.4 Request/Response Flow
 
-3. **Server processes each post** — The handler iterates over selected IDs, applying the action and collecting per-item `ItemResult` values.
+1. User selects rows and submits `BulkAction` to `posts.bulk.preview`.
+2. Server returns `bulk-action-preview` with per-item validation and embedded `confirmation-dialog`.
+3. User confirms by invoking `ConfirmBulkAction` (`posts.bulk.confirm`) with `preview_token`.
+4. Server executes and returns `bulk-action-result` (with `Self` at `posts.bulk.show`).
 
-4. **Server returns a `bulk-action-result` representation** — Instead of a refreshed post-list, the response is a first-class `bulk-action-result` with per-item results as embedded `bulk-action-item` representations and a `"collection"` link back to the post list.
+For htmx, the preview/confirm flow swaps a dialog container (`#bulk-dialog`) while keeping the list unchanged until confirm succeeds.
 
-For htmx clients: the `bulk-action-result.vue` component renders a summary banner. The client can follow the `"collection"` link to refresh the post list, or the component can use `hx-get` with the collection URL to auto-refresh the list below the banner.
-
-#### JSON Wire Format — Bulk Trash Request
+#### JSON Wire Format — Bulk Preview Request
 
 ```json
-POST /admin/posts/bulk HTTP/1.1
+POST /admin/posts/bulk/preview HTTP/1.1
 Content-Type: application/x-www-form-urlencoded
 
 selected_post_ids=42&selected_post_ids=55&selected_post_ids=99&action=trash
 ```
 
-#### JSON Wire Format — Bulk Action Result
+#### JSON Wire Format — Bulk Action Preview
 
 ```json
 {
-  "kind": "bulk-action-result",
-  "self": {"href": "/admin/posts/bulk/abc123"},
+  "kind": "bulk-action-preview",
+  "self": {"href": "/admin/posts/bulk/preview"},
   "state": {
-    "batch_id": "abc123",
+    "preview_token": "pvw_4f2d8",
     "action": "trash",
-    "total": 3,
-    "succeeded": 2,
-    "failed": 1
+    "selected_count": 3,
+    "ready_count": 2,
+    "blocked_count": 1,
+    "requires_confirmation": true
   },
   "links": [
-    {"rel": "collection", "href": "/admin/posts", "title": "Back to list"}
+    {"rel": "cancel", "href": "/admin/posts", "title": "Cancel"},
+    {"rel": "collection", "href": "/admin/posts", "title": "Back to Posts"}
+  ],
+  "actions": [
+    {
+      "name": "ConfirmBulkAction",
+      "method": "POST",
+      "href": "/admin/posts/bulk/confirm",
+      "fields": [{"name": "preview_token", "type": "hidden", "value": "pvw_4f2d8"}],
+      "hints": {"hx-post": "/admin/posts/bulk/confirm", "hx-target": "#bulk-dialog", "hx-swap": "outerHTML", "variant": "danger"}
+    }
   ],
   "embedded": {
+    "dialog": [
+      {
+        "kind": "confirmation-dialog",
+        "state": {"title": "Confirm bulk action", "message": "Apply \"trash\" to 3 selected posts?", "severity": "warning"}
+      }
+    ],
     "items": [
-      {"kind": "bulk-action-item", "state": {"id": 42, "status": "success"}},
-      {"kind": "bulk-action-item", "state": {"id": 55, "status": "success"}},
-      {"kind": "bulk-action-item", "state": {"id": 99, "status": "error", "message": "Post not found"}}
+      {"kind": "bulk-action-preview-item", "self": {"href": "/admin/posts/42"}, "state": {"post_id": 42, "current_status": "draft", "next_status": "trashed", "result": "ok"}},
+      {"kind": "bulk-action-preview-item", "self": {"href": "/admin/posts/55"}, "state": {"post_id": 55, "current_status": "published", "next_status": "trashed", "result": "ok"}},
+      {"kind": "bulk-action-preview-item", "self": {"href": "/admin/posts/99"}, "state": {"post_id": 99, "result": "blocked", "reason": "Post not found"}}
     ]
   }
 }
 ```
 
-The `bulk-action-result` representation is self-describing — generic clients can interpret `kind: "bulk-action-result"` without application-specific knowledge. The `"collection"` link provides a standard way to navigate back to the post list. Per-item results are embedded as `bulk-action-item` representations, making them navigable and inspectable. See §13.3 for the full representation definition.
+### 13.5 Result Representation
 
-### 13.3 Bulk Action Result Representation
+`bulk-action-result` remains the durable result resource:
 
-The `bulk-action-result` representation kind models the outcome of a bulk operation as a first-class resource. This eliminates the need for ad-hoc `Meta` conventions and makes bulk results self-describing, navigable, cacheable, and consistent with the rest of the `hyper` representation model.
+- Self-describing kind (`bulk-action-result`)
+- `Self` URL for retrieval (`posts.bulk.show`)
+- embedded per-item result resources
+- links for `collection` and optional follow-up (`retry-failed`, `download-report`)
 
-```go
-func bulkActionResultRepresentation(
-    batchID string,
-    action string,
-    results []ItemResult,
-    resourceListTarget hyper.Target,
-) hyper.Representation {
-    succeeded := 0
-    failed := 0
-    itemReps := make([]hyper.Representation, len(results))
-    for i, r := range results {
-        if r.Error == "" {
-            succeeded++
-        } else {
-            failed++
-        }
-        state := hyper.Object{
-            "id":     hyper.Scalar{V: r.ID},
-            "status": hyper.Scalar{V: r.Status},
-        }
-        if r.Error != "" {
-            state["message"] = hyper.Scalar{V: r.Error}
-        }
-        itemReps[i] = hyper.Representation{
-            Kind:  "bulk-action-item",
-            State: state,
-        }
-    }
-
-    return hyper.Representation{
-        Kind: "bulk-action-result",
-        Self: hyper.Route("posts.bulk.show", "batch_id", batchID).Ptr(),
-        State: hyper.Object{
-            "batch_id":  hyper.Scalar{V: batchID},
-            "action":    hyper.Scalar{V: action},
-            "total":     hyper.Scalar{V: len(results)},
-            "succeeded": hyper.Scalar{V: succeeded},
-            "failed":    hyper.Scalar{V: failed},
-        },
-        Links: []hyper.Link{
-            {Rel: "collection", Target: resourceListTarget, Title: "Back to list"},
-        },
-        Embedded: map[string][]hyper.Representation{
-            "items": itemReps,
-        },
-    }
-}
-
-type ItemResult struct {
-    ID     int
-    Status string // "success" or "error"
-    Error  string
-}
-```
-
-#### JSON Wire Format — Bulk Action Result
-
-```json
-{
-  "kind": "bulk-action-result",
-  "self": {"href": "/admin/posts/bulk/abc123"},
-  "state": {
-    "batch_id": "abc123",
-    "action": "trash",
-    "total": 3,
-    "succeeded": 2,
-    "failed": 1
-  },
-  "links": [
-    {"rel": "collection", "href": "/admin/posts", "title": "Back to list"}
-  ],
-  "embedded": {
-    "items": [
-      {"kind": "bulk-action-item", "state": {"id": 42, "status": "success"}},
-      {"kind": "bulk-action-item", "state": {"id": 55, "status": "success"}},
-      {"kind": "bulk-action-item", "state": {"id": 99, "status": "error", "message": "Post not found"}}
-    ]
-  }
-}
-```
-
-Key properties of the `bulk-action-result` kind:
-
-- **Self-describing**: Generic clients can interpret `kind: "bulk-action-result"` without application-specific knowledge of `Meta` keys.
-- **Navigable**: The `"collection"` link provides a standard way to return to the parent list. Per-item results could include `Self` links to individual resources.
-- **Consistent**: Uses the same `Representation` model as everything else — no special `Meta` convention needed.
-- **Extensible**: The `bulk-action-result` kind can carry `Actions` (e.g., "Undo" or "Retry failed items") without overloading `Meta`.
-- **Cacheable/Retrievable**: With a `Self` URL (`/admin/posts/bulk/{batch_id}`), the result can be retrieved later via `posts.bulk.show` — useful for async bulk operations.
+This keeps previews, confirmations, and results all in the same representation vocabulary.
 
 ## 14. Trash and Restore (Interaction 13)
 
@@ -5920,7 +5864,7 @@ func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-This is a two-step action: the initial DELETE returns a 409 with a `confirm-delete` representation asking for additional input (the reassignment target). The user selects a replacement category and re-submits the DELETE with the `reassign_to` parameter. The Cancel action lets the user back out. This pattern works within the spec but highlights the absence of native action chaining or confirmation-with-input support (see §16.6).
+This is a two-step action: the initial DELETE returns a 409 with a `confirm-delete` representation asking for additional input (the reassignment target). The user selects a replacement category and re-submits the DELETE with the `reassign_to` parameter. The Cancel action lets the user back out. This pattern aligns with the confirmation-resource workflow described in §16.6.
 
 ### 15.4 Upload Failure
 
@@ -6112,15 +6056,15 @@ This would be informational only — the server would still be the authority on 
 
 ### 16.3 File Upload Fields
 
-**Gap.** The `file` field type (§10.1, Field definition) works for basic uploads, but there is no way to express constraints in the `Field` spec:
+**Resolved.** File upload constraints are now first-class on `Field` and are exercised in this document's `mediaUploadFields`:
 
-- **Maximum file size** — The server enforces this (§15.4), but the client has no advance knowledge. It must submit the file and wait for a 413.
-- **Accepted MIME types** — HTML `<input type="file" accept="image/*">` uses an `accept` attribute. The spec's `Field` has no equivalent.
-- **Multiple file upload** — No way to indicate that a field accepts multiple files (HTML `multiple` attribute).
+- **`Accept`** communicates MIME/file-type constraints (maps to HTML `accept`).
+- **`MaxSize`** communicates client-visible maximum bytes.
+- **`Multiple`** communicates multi-file selection support.
 
-This document uses `Hints` on the containing action to carry `accept` and size information (§5.2, featured image field), but this is ad-hoc.
+This removes the need for ad-hoc hint conventions for core upload constraints. Servers still enforce limits authoritatively, but clients can now render the constraints up front and validate earlier.
 
-**Suggestion:** Add optional `Accept` (string, e.g. `"image/*"` or `"image/jpeg,image/png"`) and `MaxSize` (int64, bytes) fields to `Field` when `Type` is `"file"`. Alternatively, define a convention for `Hints` keys: `{"accept": "image/*", "max_size": 10485760, "multiple": true}`. The `Hints`-based approach is more flexible and avoids bloating the core `Field` struct for a single field type.
+**Suggestion:** Keep codec guidance explicit: for `Type: "file"`, codecs should map `Accept`, `MaxSize`, and `Multiple` to native controls where available, and surface unsupported constraints as help text.
 
 ### 16.4 Multi-Step Workflows / State Machines
 
@@ -6169,27 +6113,34 @@ No changes to the core `Option` type are needed. **Severity: Low** (downgraded f
 
 ### 16.6 Confirmation Dialogs with Additional Input
 
-**Gap.** Deleting a category with posts requires a two-step interaction: first confirm the deletion, then select a replacement category (§15.3). This is a confirmation dialog that also collects additional input — it is not a simple yes/no confirm.
+**Resolved by resource modeling.** Destructive and multi-step operations are now modeled as explicit confirmation resources instead of relying on `hx-confirm` alone.
 
-The spec handles this by returning a `confirm-delete` representation (409 Conflict) with a ConfirmDelete action containing the reassignment field. This works, but it requires the client to understand that the 409 response is a "please re-submit with additional data" signal rather than a terminal error.
+Examples in this document now use:
 
-The spec has no native concept of action chaining or confirmation-with-input. The `Hints["hx-confirm"]` mechanism only supports simple browser confirm dialogs with no additional fields.
+- `confirm-delete` for category delete with reassignment input (§15.3)
+- `bulk-action-preview` + embedded `confirmation-dialog` + `ConfirmBulkAction` (§13)
 
-**Suggestion:** Document this pattern as a recommended practice in the spec: "When an action requires additional user input before proceeding, the server MAY return a 409 Conflict with a representation containing a new action that includes the required fields. The original action's target and method should be preserved in the new action so the client can re-submit." This does not require spec changes — just documentation of the established pattern.
+This keeps confirmation as navigable/actionable hypermedia with proper `Kind`, `State`, `Links`, and `Actions`. Clients can render a dialog, a side panel, or a CLI prompt from the same representation model.
 
-### 16.7 Bulk Action Result Reporting
+**Suggestion:** Add a non-normative "confirmation resource pattern" note to the spec that recommends returning a representation with explicit confirm/cancel actions when extra input or preview is needed.
 
-**Resolved — bulk actions modelled as resources.** The original gap identified that `Meta["bulk_result"]` was opaque to generic clients and required application-specific knowledge to interpret.
+### 16.7 Bulk Action Workflow
 
-The resolution: bulk actions are now modelled as first-class resources. A bulk operation returns a `bulk-action-result` representation (§13.3) with its own `Kind`, `Self`, `State`, `Embedded` items (per-item results), and `Links` (back to the collection). This eliminates the need for any `Meta` convention:
+**Resolved — bulk workflow modeled as resources.** The original gap identified that bulk behavior hidden in action-local metadata was opaque to generic clients.
 
-- **Self-describing**: Generic clients interpret `kind: "bulk-action-result"` without application-specific knowledge.
+The resolution now models the full flow as resources:
+
+- `bulk-action-preview` for validation + impact summary
+- embedded `confirmation-dialog` for explicit user confirmation
+- `bulk-action-result` for persisted execution outcomes
+
+- **Self-describing**: Generic clients can reason about preview, confirm, and result as typed representations.
 - **Navigable**: The `"collection"` link provides a standard way to return to the parent list.
 - **Consistent**: Uses the same `Representation` model as everything else.
 - **Extensible**: The `bulk-action-result` kind can carry `Actions` (e.g., "Undo" or "Retry failed items").
 - **Cacheable/Retrievable**: With a `Self` URL, the result can be retrieved later (useful for async bulk operations).
 
-Dedicated bulk routes (`posts.bulk`, `comments.bulk`, `media.bulk`) receive the bulk action submissions, and `posts.bulk.show` serves as the retrieval endpoint for stored results. See §13.1–§13.3 for the full implementation.
+Dedicated routes (`*.bulk.preview`, `*.bulk.confirm`, `posts.bulk.show`) make each stage addressable and testable. See §13 for the full flow.
 
 ### 16.8 Content Negotiation for Uploads
 
@@ -6272,11 +6223,11 @@ This pattern enables `dispatch.Resource` helpers (which register PUT for update 
 |---|-------------------|----------|---------|--------|
 | 16.1 | Recursive Embedded Representations — no depth limit guidance | Low | §4.3 Embedded | Open |
 | 16.2 | Conditional Action Visibility — no declarative mechanism | Low | §7 Action | Open — workaround is idiomatic |
-| 16.3 | File Upload Fields — no `Accept`/`MaxSize` on Field | Medium | §10.1 Field | Resolved — added `Accept`, `MaxSize`, `Multiple` fields to `Field` struct |
+| 16.3 | File Upload Fields — native `Accept`/`MaxSize`/`Multiple` support | Low | §10.1 Field | Resolved — upload constraints are first-class on `Field` |
 | 16.4 | Multi-Step Workflows / State Machines — no graph declaration | Low | §7 Action | Open — informational only |
 | 16.5 | Hierarchical Select Options — resolved via resource modelling | Low | §12 Settings | Resolved — options as embedded resources with group field |
-| 16.6 | Confirmation Dialogs with Additional Input — no action chaining | Medium | §7 Action | Open — document pattern |
-| 16.7 | Bulk Action Result Reporting — no Meta convention | Medium | §13 Bulk Operations | Resolved — bulk actions modelled as resources |
+| 16.6 | Confirmation Dialogs with Additional Input — modelled as resources | Low | §7 Action | Resolved — confirmation representations with confirm/cancel actions |
+| 16.7 | Bulk Action Workflow — preview/confirm/result resources | Low | §13 Bulk Operations | Resolved — end-to-end bulk flow modelled as resources |
 | 16.8 | Content Negotiation for Uploads — Consumes/Field interplay | Low | §7.3 Consumes | Open — documentation only |
 | 16.9 | Cross-Resource References in Forms — no resource-picker type | Low | §10.1 Field | Open |
 | 16.10 | Settings as Collection of Individual Resources — name-keyed members | Low | §12 Settings | Resolved — settings modelled as collection |
