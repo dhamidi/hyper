@@ -405,6 +405,44 @@ func TestDeleteTask_HTMXWithoutAcceptRefreshesList(t *testing.T) {
 	}
 }
 
+func TestTailwindStylesheetIsSelfSufficient(t *testing.T) {
+	srv, _ := testServer(t)
+
+	htmlResp := doReq(t, "GET", srv.URL+"/", "text/html", "")
+	html := readBody(t, htmlResp)
+
+	const marker = `rel="stylesheet" href="`
+	start := strings.Index(html, marker)
+	if start < 0 {
+		t.Fatalf("expected stylesheet link in HTML, got:\n%s", html)
+	}
+	start += len(marker)
+	end := strings.Index(html[start:], `"`)
+	if end < 0 {
+		t.Fatalf("failed to parse stylesheet href from HTML")
+	}
+	href := html[start : start+end]
+
+	cssResp := doReq(t, "GET", srv.URL+href, "text/css", "")
+	css := readBody(t, cssResp)
+
+	if !strings.Contains(css, ":root, :host {") {
+		t.Fatal("stylesheet missing theme variable layer")
+	}
+	if !strings.Contains(css, "--spacing:") {
+		t.Fatal("stylesheet missing expected theme tokens")
+	}
+	if !strings.Contains(css, "@property --tw-border-style") {
+		t.Fatal("stylesheet missing @property declarations")
+	}
+	if !strings.Contains(css, "--tw-border-style: solid") {
+		t.Fatal("stylesheet missing legacy fallback defaults for --tw-* vars")
+	}
+	if strings.Count(css, "{") != strings.Count(css, "}") {
+		t.Fatal("stylesheet has unbalanced braces")
+	}
+}
+
 func TestParseFormWithFlags_TypedValuesAndValidation(t *testing.T) {
 	form := url.Values{
 		"title": {"  abcdef  "},
