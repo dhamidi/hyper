@@ -10,8 +10,9 @@ The `hyper` package provides a native JSON codec:
 ```go
 import "github.com/dhamidi/hyper"
 
-repCodec := hyper.JSONCodec()           // encodes Representation as JSON
-subCodec := hyper.JSONSubmissionCodec() // decodes and encodes JSON request bodies
+repCodec  := hyper.JSONCodec()            // encodes Representation as JSON
+jsonSub   := hyper.JSONSubmissionCodec() // decodes and encodes JSON request bodies
+formSub   := hyper.FormSubmissionCodec() // decodes and encodes form-urlencoded request bodies
 ```
 
 ## JSON:API support

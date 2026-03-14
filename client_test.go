@@ -564,7 +564,8 @@ func TestSubmit_UsesSelectedSubmissionCodec(t *testing.T) {
 		encodedBody: "name=test&age=30",
 	}
 
-	c, _ := NewClient(srv.URL, WithSubmissionCodec(mock))
+	c, _ := NewClient(srv.URL)
+	c.SubmissionCodecs = []SubmissionCodec{mock}
 	action := Action{
 		Method:   "POST",
 		Target:   MustParseTarget(srv.URL + "/submit"),

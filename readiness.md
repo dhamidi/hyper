@@ -76,23 +76,18 @@ Custom submission codecs are now fully functional on the client side.
 
 #### D6 — No FormSubmissionCodec for application/x-www-form-urlencoded (§11.8)
 
-**File:** `client.go`, `NewClient` function (line ~111)
+**Status: Resolved**
+
+**File:** `form_codec.go`, `client.go` `NewClient` function
 
 **Spec requirement (§11.8):** `NewClient` defaults SHALL include
 `SubmissionCodecs: [JSONSubmissionCodec, FormSubmissionCodec]`.
 
-**Current behavior:** `NewClient` registers only `JSONSubmissionCodec()`.
-No `FormSubmissionCodec` type exists anywhere in the codebase. The spec's
-`§15.3` example shows a `FormCodec.Decode` call for form-encoded bodies,
-implying a form codec is expected.
-
-**Impact:** Server handlers cannot decode `application/x-www-form-urlencoded`
-submissions using the codec abstraction; they must fall back to manual
-`r.ParseForm()` calls, undermining the codec architecture.
-
-**Remediation:** Implement a `FormSubmissionCodec` that wraps
-`net/http.Request.ParseForm` and populates `*map[string]any` targets.
-Register it as a default in `NewClient`.
+**Resolution:** Implemented `FormSubmissionCodec` in `form_codec.go` that
+decodes `application/x-www-form-urlencoded` bodies into `*map[string]any`
+targets using `url.ParseQuery`, and encodes `map[string]any` values as
+form-urlencoded bodies using `url.Values`. Registered as a default in
+`NewClient` alongside `JSONSubmissionCodec`.
 
 ---
 

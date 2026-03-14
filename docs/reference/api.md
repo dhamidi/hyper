@@ -95,8 +95,9 @@ defaults := hyper.ActionValues(action)
 ### Codecs
 
 ```go
-hyper.JSONCodec()           // RepresentationCodec for application/json
-hyper.JSONSubmissionCodec() // SubmissionCodec for application/json
+hyper.JSONCodec()            // RepresentationCodec for application/json
+hyper.JSONSubmissionCodec()  // SubmissionCodec for application/json
+hyper.FormSubmissionCodec()  // SubmissionCodec for application/x-www-form-urlencoded
 ```
 
 `SubmissionCodec` supports both directions: `Decode` for server-side request

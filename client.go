@@ -111,7 +111,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		Transport:        http.DefaultClient,
 		Codecs:           []RepresentationCodec{JSONCodec()},
-		SubmissionCodecs: []SubmissionCodec{JSONSubmissionCodec()},
+		SubmissionCodecs: []SubmissionCodec{JSONSubmissionCodec(), FormSubmissionCodec()},
 		BaseURL:          u,
 		Accept:           "application/json",
 	}
