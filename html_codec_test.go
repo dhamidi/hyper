@@ -473,6 +473,112 @@ func TestHTMLCodec_RouteTarget(t *testing.T) {
 	}
 }
 
+func TestHTMLCodec_ActionHints_HtmxAttributes(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Update Email",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/contacts/42/email")},
+				Fields: []Field{
+					{Name: "email", Type: "email"},
+				},
+				Hints: map[string]any{
+					"hx-target": "#contact-email",
+					"hx-swap":   "outerHTML",
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `hx-target="#contact-email"`) {
+		t.Error("expected hx-target attribute on form")
+	}
+	if !strings.Contains(html, `hx-swap="outerHTML"`) {
+		t.Error("expected hx-swap attribute on form")
+	}
+}
+
+func TestHTMLCodec_ActionHints_Hidden(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Secret Action",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/secret")},
+				Hints: map[string]any{
+					"hidden": true,
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if strings.Contains(html, "Secret Action") {
+		t.Error("action with hidden: true should not be rendered")
+	}
+	if strings.Contains(html, "<form") {
+		t.Error("hidden action should not produce a form element")
+	}
+}
+
+func TestHTMLCodec_ActionHints_Destructive(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Delete",
+				Method: "DELETE",
+				Target: Target{URL: mustParseURL("/contacts/42")},
+				Hints: map[string]any{
+					"destructive": true,
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `class="destructive"`) {
+		t.Error("expected class=\"destructive\" on form for destructive hint")
+	}
+}
+
+func TestHTMLCodec_ActionHints_HTMLEscaping(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Test",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/test")},
+				Hints: map[string]any{
+					"hx-target": `<script>alert("xss")</script>`,
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if strings.Contains(html, "<script>") {
+		t.Error("hint values must be HTML-escaped")
+	}
+	if !strings.Contains(html, "hx-target=") {
+		t.Error("expected hx-target attribute to be present")
+	}
+}
+
+func TestHTMLCodec_RepresentationHints(t *testing.T) {
+	rep := Representation{
+		Kind: "contact",
+		Hints: map[string]any{
+			"id":      "main-contact",
+			"hx-boost": "true",
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `id="main-contact"`) {
+		t.Error("expected id attribute from representation hints")
+	}
+	if !strings.Contains(html, `hx-boost="true"`) {
+		t.Error("expected hx-boost attribute from representation hints")
+	}
+}
+
 func TestHTMLCodec_EmptyRepresentation(t *testing.T) {
 	html := encodeHTML(t, Representation{}, RenderFragment)
 	if !strings.Contains(html, "<article>") {

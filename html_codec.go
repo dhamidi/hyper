@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -19,6 +20,13 @@ type htmlRepCodec struct{}
 // (PUT, DELETE, PATCH) are rendered as POST forms with a hidden _method
 // field containing the original method. Use the methodoverride middleware
 // to interpret this field on the server side.
+//
+// The codec interprets Hints on both Representation and Action values.
+// String-valued hints are emitted as HTML attributes (e.g., "hx-target"
+// becomes hx-target="…"). The bool hint "destructive" (true) adds
+// class="destructive" to the element. The bool hint "hidden" (true)
+// suppresses rendering of the action entirely. All attribute values are
+// HTML-escaped to prevent XSS.
 func HTMLCodec() RepresentationCodec { return htmlRepCodec{} }
 
 func (htmlRepCodec) MediaTypes() []string { return []string{"text/html"} }
@@ -48,15 +56,14 @@ func (c htmlRepCodec) Encode(ctx context.Context, w io.Writer, rep Representatio
 }
 
 func writeFragment(ctx context.Context, w io.Writer, rep Representation, opts EncodeOptions) error {
+	var articleAttrs strings.Builder
 	if rep.Kind != "" {
 		escapedKind := template.HTMLEscapeString(rep.Kind)
-		if _, err := fmt.Fprintf(w, "<article data-kind=%q>\n", escapedKind); err != nil {
-			return err
-		}
-	} else {
-		if _, err := io.WriteString(w, "<article>\n"); err != nil {
-			return err
-		}
+		fmt.Fprintf(&articleAttrs, " data-kind=%q", escapedKind)
+	}
+	articleAttrs.WriteString(hintAttrs(rep.Hints))
+	if _, err := fmt.Fprintf(w, "<article%s>\n", articleAttrs.String()); err != nil {
+		return err
 	}
 
 	if rep.Kind != "" {
@@ -192,6 +199,13 @@ func writeLinks(ctx context.Context, w io.Writer, links []Link, opts EncodeOptio
 
 func writeActions(ctx context.Context, w io.Writer, actions []Action, opts EncodeOptions) error {
 	for _, a := range actions {
+		// "hidden" hint: skip rendering entirely
+		if hidden, ok := a.Hints["hidden"]; ok {
+			if b, ok := hidden.(bool); ok && b {
+				continue
+			}
+		}
+
 		href, err := resolveTarget(ctx, a.Target, opts.Resolver)
 		if err != nil {
 			return fmt.Errorf("html: resolve action %q: %w", a.Name, err)
@@ -215,7 +229,8 @@ func writeActions(ctx context.Context, w io.Writer, actions []Action, opts Encod
 			formMethod = "POST"
 		}
 
-		if _, err := fmt.Fprintf(w, "<form method=%q action=%q>\n", formMethod, escapedHref); err != nil {
+		extra := hintAttrs(a.Hints)
+		if _, err := fmt.Fprintf(w, "<form method=%q action=%q%s>\n", formMethod, escapedHref, extra); err != nil {
 			return err
 		}
 		if needsMethodOverride {
@@ -242,6 +257,41 @@ func writeActions(ctx context.Context, w io.Writer, actions []Action, opts Encod
 		}
 	}
 	return nil
+}
+
+// hintAttrs converts a Hints map into a string of HTML attributes.
+// String values are emitted as key="escaped-value".
+// The bool hint "destructive" (true) emits class="destructive".
+// The "hidden" hint is handled by the caller and skipped here.
+// Non-string, non-bool hints are silently skipped.
+func hintAttrs(hints map[string]any) string {
+	if len(hints) == 0 {
+		return ""
+	}
+
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(hints))
+	for k := range hints {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		v := hints[k]
+		switch val := v.(type) {
+		case string:
+			fmt.Fprintf(&b, " %s=%q", template.HTMLEscapeString(k), template.HTMLEscapeString(val))
+		case bool:
+			if k == "destructive" && val {
+				b.WriteString(` class="destructive"`)
+			}
+			// other bool hints silently skipped
+		default:
+			// non-string, non-bool silently skipped
+		}
+	}
+	return b.String()
 }
 
 func writeField(w io.Writer, f Field) error {
