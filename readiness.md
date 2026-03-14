@@ -237,7 +237,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
 | D7  | §8.2.1  | Minor          | Resolved        | Error on unresolved Route targets without Resolver |
 | D10 | §7.3    | Minor (spec)   | Impl ahead      | Field has undocumented Accept/MaxSize/Multiple     |
-| D9  | §18.3   | Minor (spec)   | Spec bug        | Nil-map panic in example code                     |
+| D9  | §18.3   | Minor (spec)   | Resolved        | Nil-map panic in example code                     |
 
 ## Recommended Priority
 

@@ -2927,8 +2927,12 @@ func buildRepresentation(v any) Representation {
         rep.Actions = ap.HyperActions()
     }
     if ep, ok := v.(EmbeddedProvider); ok {
-        for slot, reps := range ep.HyperEmbedded() {
-            rep.Embedded[slot] = append(rep.Embedded[slot], reps...)
+        embedded := ep.HyperEmbedded()
+        if len(embedded) > 0 {
+            rep.Embedded = make(map[string][]Representation, len(embedded))
+            for slot, reps := range embedded {
+                rep.Embedded[slot] = append(rep.Embedded[slot], reps...)
+            }
         }
     }
 
