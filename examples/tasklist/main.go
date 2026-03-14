@@ -196,7 +196,8 @@ func (c htmlcCodec) Encode(ctx context.Context, w io.Writer, rep hyper.Represent
 // and embedded slots are recursively converted.
 func representationToScope(ctx context.Context, rep hyper.Representation, opts hyper.EncodeOptions) map[string]any {
 	scope := map[string]any{
-		"kind": rep.Kind,
+		"kind":           rep.Kind,
+		"renderDocument": opts.Mode == hyper.RenderDocument,
 	}
 
 	// Self href
