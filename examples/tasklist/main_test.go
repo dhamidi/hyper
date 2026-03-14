@@ -302,6 +302,32 @@ func TestToggleTask_HTMLFragment(t *testing.T) {
 	}
 }
 
+func TestCreateTask_HTMXUsesOOBSwap(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "POST", srv.URL+"/tasks", map[string]string{
+		"Accept":     "text/html",
+		"HX-Request": "true",
+	}, "title=Via+HTMX")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(body, "<!DOCTYPE") {
+		t.Error("htmx create response should be a fragment, not full document")
+	}
+	if !strings.Contains(body, `id="task-list-content"`) {
+		t.Error("htmx create response should include task-list-content root")
+	}
+	if !strings.Contains(body, `hx-swap-oob="outerHTML:#task-list-content"`) {
+		t.Error("htmx create response should include OOB swap attribute")
+	}
+	if !strings.Contains(body, "Via HTMX") {
+		t.Error("htmx create response should include new task")
+	}
+}
+
 func TestDeleteTask_HTMLFragmentRefreshesList(t *testing.T) {
 	srv, _ := testServer(t)
 
@@ -314,7 +340,7 @@ func TestDeleteTask_HTMLFragmentRefreshesList(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("got status %d, want 200", resp.StatusCode)
 	}
-	if !strings.Contains(body, `id="task-list-root"`) {
+	if !strings.Contains(body, `id="task-list-content"`) {
 		t.Error("delete fragment should return refreshed task-list container")
 	}
 	if strings.Contains(body, "Test task one") {
@@ -333,7 +359,7 @@ func TestDeleteTask_HTMXWithoutAcceptRefreshesList(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("got status %d, want 200", resp.StatusCode)
 	}
-	if !strings.Contains(body, `id="task-list-root"`) {
+	if !strings.Contains(body, `id="task-list-content"`) {
 		t.Error("htmx delete should return refreshed task-list container")
 	}
 	if strings.Contains(body, "Test task one") {

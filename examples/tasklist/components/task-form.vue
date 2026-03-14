@@ -1,5 +1,5 @@
 <template>
-  <form method="POST" :action="href">
+  <form method="POST" :action="href" v-bind="hxAttrs">
     <h2>{{ name }}</h2>
     <template v-for="field in fields">
       <label v-if="field.type !== 'hidden' && field.type !== 'select'">{{ field.label }}

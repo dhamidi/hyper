@@ -128,7 +128,7 @@ func taskRep(t Task) hyper.Representation {
 				Hints: map[string]any{
 					"destructive": true,
 					"hx-delete":   fmt.Sprintf("/tasks/%d", t.ID),
-					"hx-target":   "#task-list-root",
+					"hx-target":   "#task-list-content",
 					"hx-swap":     "outerHTML",
 				},
 			},
@@ -158,6 +158,10 @@ func taskListRep(store *TaskStore) hyper.Representation {
 				Target: hyper.Pathf("/tasks"),
 				Fields: []hyper.Field{
 					{Name: "title", Type: "text", Required: true, Label: "Title"},
+				},
+				Hints: map[string]any{
+					"hx-post": hyper.Pathf("/tasks").URL.String(),
+					"hx-swap": "none",
 				},
 			},
 		},
@@ -289,6 +293,19 @@ func representationToScope(ctx context.Context, rep hyper.Representation, opts h
 		scope["embedded"] = embedded
 	}
 
+	// Representation-level hints (used for OOB swaps)
+	if len(rep.Hints) > 0 {
+		rootHxAttrs := make(map[string]any)
+		for k, v := range rep.Hints {
+			if strings.HasPrefix(k, "hx-") {
+				rootHxAttrs[k] = v
+			}
+		}
+		if len(rootHxAttrs) > 0 {
+			scope["rootHxAttrs"] = rootHxAttrs
+		}
+	}
+
 	return scope
 }
 
@@ -399,11 +416,21 @@ func newMux(store *TaskStore) http.Handler {
 					break
 				}
 			}
+			if r.Header.Get("HX-Request") == "true" {
+				rep.Hints = map[string]any{"hx-swap-oob": "outerHTML:#task-list-content"}
+			}
 			renderer.RespondWithMode(w, r, http.StatusUnprocessableEntity, rep, renderMode(r))
 			return
 		}
 
 		t := store.Create(title)
+
+		if r.Header.Get("HX-Request") == "true" {
+			rep := taskListRep(store)
+			rep.Hints = map[string]any{"hx-swap-oob": "outerHTML:#task-list-content"}
+			renderer.RespondWithMode(w, r, http.StatusOK, rep, hyper.RenderFragment)
+			return
+		}
 
 		if prefersHTML(r, renderer) {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
