@@ -35,6 +35,61 @@ The current design centers on:
   token streams. Both methods fall back to a single-response channel when the
   server responds with a non-SSE content type
 
+## htmlc — Server-Side Vue Component Engine
+
+The `htmlc/` directory contains a companion Go module (`github.com/dhamidi/htmlc`)
+that provides a server-side template engine using Vue.js Single File Component
+(`.vue`) syntax. It is designed to work with hyper as a custom `RepresentationCodec`.
+
+### Quick Start
+
+```go
+engine, err := htmlc.New(htmlc.Options{
+    ComponentDir: "components/",
+})
+
+// Render as a full HTML document
+engine.RenderPage(w, "dashboard", scope)
+
+// Render as a bare fragment (e.g., for htmx partials)
+engine.RenderFragment(w, "task-list", scope)
+```
+
+### Supported Template Features
+
+- **Text interpolation**: `{{ expression }}` with dot-path lookups
+- **`v-for`**: `<template v-for="item in list">` for iteration
+- **`v-if` / `v-else`**: conditional rendering
+- **`:attr` binding**: `:href="expr"`, `:class="'prefix ' + value"`
+- **`v-bind` spread**: `v-bind="mapExpr"` to spread a map as HTML attributes
+- **`v-html`**: raw HTML insertion (trusted content)
+- **Child components**: `<task-row v-bind="item">` renders another `.vue` component
+- **Boolean attributes**: `:selected`, `:required`, `:checked` render or omit based on truthiness
+
+### Component Not Found
+
+When a component is not found, the error wraps `htmlc.ErrComponentNotFound`.
+Use `htmlc.IsComponentNotFound(err)` to detect this for fallback logic:
+
+```go
+err := engine.RenderFragment(w, name, scope)
+if err != nil && htmlc.IsComponentNotFound(err) {
+    // Fall back to generic HTML codec
+}
+```
+
+### Importing from Examples
+
+Example apps import htmlc via a `replace` directive:
+
+```
+require github.com/dhamidi/htmlc v0.0.0
+replace github.com/dhamidi/htmlc => ../../htmlc
+```
+
+See [`use-cases/htmlc-codec.md`](./use-cases/htmlc-codec.md) for the full
+integration pattern with hyper's `RepresentationCodec`.
+
 ## Examples
 
 ### Task List

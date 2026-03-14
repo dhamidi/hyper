@@ -25,6 +25,7 @@ See `use-cases/AGENTS.md` for conventions on writing use-case exploration docume
 
 ## Subdirectories
 
+- `htmlc/` — Server-side Vue SFC template engine (separate Go module `github.com/dhamidi/htmlc`)
 - `jsonapi/` — JSON:API codec
 - `docs/` — Documentation (explanation, how-to, reference, tutorials)
 - `use-cases/` — Use-case exploration documents
