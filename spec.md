@@ -1411,6 +1411,8 @@ func FindLink(rep Representation, rel string) (Link, bool)
 // FindAction returns the first Action with the given rel, or false if not found.
 func FindAction(rep Representation, rel string) (Action, bool)
 
+`FindAction` matches on `Action.Rel`, not `Action.Name`. Applications that need name-based lookup should iterate `Representation.Actions` directly.
+
 // FindEmbedded returns the embedded representations in the given slot, or nil.
 func FindEmbedded(rep Representation, slot string) []Representation
 
