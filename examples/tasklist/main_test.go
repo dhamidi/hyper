@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -401,5 +402,77 @@ func TestDeleteTask_HTMXWithoutAcceptRefreshesList(t *testing.T) {
 	}
 	if strings.Contains(body, "Test task one") {
 		t.Error("deleted task still present in refreshed list")
+	}
+}
+
+func TestParseFormWithFlags_TypedValuesAndValidation(t *testing.T) {
+	form := url.Values{
+		"title": {"  abcdef  "},
+		"count": {"12"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	parsed, err := parseFormWithFlags(req, []formFieldSpec{
+		{
+			Name:      "title",
+			Type:      formFieldString,
+			Required:  true,
+			Normalize: strings.TrimSpace,
+			Validate: func(v any) string {
+				if len(v.(string)) <= 3 {
+					return "too short"
+				}
+				return ""
+			},
+		},
+		{
+			Name:     "count",
+			Type:     formFieldInt,
+			Required: true,
+			Validate: func(v any) string {
+				if v.(int) <= 0 {
+					return "must be positive"
+				}
+				return ""
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(parsed.Errors) != 0 {
+		t.Fatalf("unexpected validation errors: %#v", parsed.Errors)
+	}
+	if got := parsed.Values["title"]; got != "abcdef" {
+		t.Fatalf("got title %v, want abcdef", got)
+	}
+	if got := parsed.Raw["title"]; got != "  abcdef  " {
+		t.Fatalf("got raw title %v, want preserved raw value", got)
+	}
+	if got := parsed.Values["count"]; got != 12 {
+		t.Fatalf("got count %v, want 12", got)
+	}
+}
+
+func TestParseFormWithFlags_TypeErrorAndRequired(t *testing.T) {
+	form := url.Values{
+		"count": {"nope"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	parsed, err := parseFormWithFlags(req, []formFieldSpec{
+		{Name: "title", Type: formFieldString, Required: true},
+		{Name: "count", Type: formFieldInt, Required: true},
+	})
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if _, ok := parsed.Errors["title"]; !ok {
+		t.Fatalf("expected required error for title, got %#v", parsed.Errors)
+	}
+	if _, ok := parsed.Errors["count"]; !ok {
+		t.Fatalf("expected type error for count, got %#v", parsed.Errors)
 	}
 }

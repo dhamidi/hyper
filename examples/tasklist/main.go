@@ -6,11 +6,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -211,6 +213,184 @@ type htmlcCodec struct {
 	tailwindHref string
 }
 
+type formFieldType string
+
+const (
+	formFieldString formFieldType = "string"
+	formFieldInt    formFieldType = "int"
+	formFieldBool   formFieldType = "bool"
+)
+
+type formFieldSpec struct {
+	Name      string
+	Type      formFieldType
+	Required  bool
+	Normalize func(string) string
+	Validate  func(any) string
+}
+
+type boundValue interface {
+	flag.Value
+	IsSet() bool
+	Any() any
+	IsEmpty() bool
+}
+
+type stringBound struct {
+	value     string
+	set       bool
+	normalize func(string) string
+}
+
+func (b *stringBound) String() string { return b.value }
+
+func (b *stringBound) Set(v string) error {
+	b.set = true
+	if b.normalize != nil {
+		v = b.normalize(v)
+	}
+	b.value = v
+	return nil
+}
+
+func (b *stringBound) IsSet() bool   { return b.set }
+func (b *stringBound) Any() any      { return b.value }
+func (b *stringBound) IsEmpty() bool { return b.value == "" }
+
+type intBound struct {
+	value int
+	set   bool
+}
+
+func (b *intBound) String() string { return strconv.Itoa(b.value) }
+
+func (b *intBound) Set(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return err
+	}
+	b.set = true
+	b.value = n
+	return nil
+}
+
+func (b *intBound) IsSet() bool   { return b.set }
+func (b *intBound) Any() any      { return b.value }
+func (b *intBound) IsEmpty() bool { return false }
+
+type boolBound struct {
+	value bool
+	set   bool
+}
+
+func (b *boolBound) String() string { return strconv.FormatBool(b.value) }
+
+func (b *boolBound) Set(v string) error {
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return err
+	}
+	b.set = true
+	b.value = parsed
+	return nil
+}
+
+func (b *boolBound) IsSet() bool   { return b.set }
+func (b *boolBound) Any() any      { return b.value }
+func (b *boolBound) IsEmpty() bool { return false }
+
+type parsedForm struct {
+	Values map[string]any
+	Raw    map[string]any
+	Errors map[string]string
+}
+
+func parseFormWithFlags(r *http.Request, specs []formFieldSpec) (parsedForm, error) {
+	if err := r.ParseForm(); err != nil {
+		return parsedForm{}, err
+	}
+
+	fs := flag.NewFlagSet("form", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	bound := make(map[string]boundValue, len(specs))
+
+	for _, spec := range specs {
+		var b boundValue
+		switch spec.Type {
+		case formFieldString:
+			b = &stringBound{normalize: spec.Normalize}
+		case formFieldInt:
+			b = &intBound{}
+		case formFieldBool:
+			b = &boolBound{}
+		default:
+			b = &stringBound{normalize: spec.Normalize}
+		}
+		fs.Var(b, spec.Name, "")
+		bound[spec.Name] = b
+	}
+
+	keys := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		keys = append(keys, spec.Name)
+	}
+	sort.Strings(keys)
+
+	out := parsedForm{
+		Values: make(map[string]any, len(specs)),
+		Raw:    make(map[string]any, len(specs)),
+		Errors: map[string]string{},
+	}
+
+	for _, name := range keys {
+		if raw, ok := r.Form[name]; ok && len(raw) > 0 {
+			out.Raw[name] = raw[0]
+			if err := fs.Set(name, raw[0]); err != nil {
+				out.Errors[name] = err.Error()
+			}
+		}
+	}
+
+	for _, spec := range specs {
+		b := bound[spec.Name]
+		if !b.IsSet() {
+			if spec.Required {
+				out.Errors[spec.Name] = "This field is required"
+			}
+			continue
+		}
+		if spec.Required && b.IsEmpty() {
+			out.Errors[spec.Name] = "This field is required"
+			continue
+		}
+		val := b.Any()
+		out.Values[spec.Name] = val
+		if spec.Validate != nil {
+			if msg := spec.Validate(val); msg != "" {
+				out.Errors[spec.Name] = msg
+			}
+		}
+	}
+
+	return out, nil
+}
+
+var createTaskFormSpec = []formFieldSpec{
+	{
+		Name:      "title",
+		Type:      formFieldString,
+		Required:  true,
+		Normalize: strings.TrimSpace,
+		Validate: func(v any) string {
+			title, _ := v.(string)
+			if len(title) <= 3 {
+				return "Title must be longer than 3 characters"
+			}
+			return ""
+		},
+	},
+}
+
 func (c htmlcCodec) MediaTypes() []string {
 	return []string{"text/html"}
 }
@@ -405,6 +585,22 @@ func prefersHTML(r *http.Request, renderer hyper.Renderer) bool {
 	return ok && mediaType == "text/html"
 }
 
+func withActionValidationErrors(rep *hyper.Representation, actionName string, values map[string]any, errors map[string]string, oobSwap string) {
+	for i, a := range rep.Actions {
+		if a.Name != actionName {
+			continue
+		}
+		rep.Actions[i].Fields = hyper.WithErrors(a.Fields, values, errors)
+		if oobSwap != "" {
+			if rep.Actions[i].Hints == nil {
+				rep.Actions[i].Hints = map[string]any{}
+			}
+			rep.Actions[i].Hints["hx-swap-oob"] = oobSwap
+		}
+		return
+	}
+}
+
 // newMux creates the HTTP handler with all routes.
 func newMux(store *TaskStore) http.Handler {
 	engine, err := htmlc.New(htmlc.Options{ComponentDir: "components"})
@@ -442,32 +638,22 @@ func newMux(store *TaskStore) http.Handler {
 	})
 
 	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
+		parsed, err := parseFormWithFlags(r, createTaskFormSpec)
+		if err != nil {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
 		}
-		title := strings.TrimSpace(r.FormValue("title"))
-		if len(title) <= 3 {
+		if len(parsed.Errors) > 0 {
 			rep := taskListRep(store)
-			for i, a := range rep.Actions {
-				if a.Name == "create" {
-					rep.Actions[i].Fields = hyper.WithErrors(
-						a.Fields,
-						map[string]any{"title": r.FormValue("title")},
-						map[string]string{"title": "Title must be longer than 3 characters"},
-					)
-					if r.Header.Get("HX-Request") == "true" {
-						if rep.Actions[i].Hints == nil {
-							rep.Actions[i].Hints = map[string]any{}
-						}
-						rep.Actions[i].Hints["hx-swap-oob"] = "outerHTML:#task-create-form"
-					}
-					break
-				}
+			oobSwap := ""
+			if r.Header.Get("HX-Request") == "true" {
+				oobSwap = "outerHTML:#task-create-form"
 			}
+			withActionValidationErrors(&rep, "create", parsed.Raw, parsed.Errors, oobSwap)
 			renderer.RespondWithMode(w, r, http.StatusUnprocessableEntity, rep, renderMode(r))
 			return
 		}
+		title, _ := parsed.Values["title"].(string)
 
 		t := store.Create(title)
 
