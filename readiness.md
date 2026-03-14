@@ -114,17 +114,17 @@ negotiation on `text/html`.
 
 #### D2 — No Markdown RepresentationCodec (§13)
 
+**Status: Resolved**
+
 **Spec requirement (§13):** Markdown SHOULD be treated as a read-oriented
 alternate representation.
 
-**Current behavior:** No Markdown codec exists.
-
-**Impact:** The `RespondAs(w, r, 200, "text/markdown", rep)` pattern shown
-in §15.4 will fail with no matching codec.
-
-**Remediation:** Implement a Markdown `RepresentationCodec` that renders
-state as Markdown prose, links as `[text](url)`, and actions as descriptive
-blocks. This is a SHOULD-level requirement.
+**Resolution:** Implemented `MarkdownCodec()` in `markdown_codec.go` that
+encodes representations as Markdown prose. State renders as bold-key lists
+(objects) or numbered lists (collections), links render as `[text](url)`
+Markdown links, and actions render as descriptive blocks listing endpoint,
+fields, types, and options. The codec integrates with the `Renderer`
+pipeline via content negotiation on `text/markdown`.
 
 ---
 
@@ -210,7 +210,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D4  | §11.4.2 | Architectural  | Resolved        | Submit now uses SubmissionCodec.Encode              |
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
 | D1  | §12     | SHOULD         | Resolved        | HTMLCodec renders semantic HTML via Renderer       |
-| D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |
+| D2  | §13     | SHOULD         | Resolved        | MarkdownCodec renders prose via Renderer           |
 | D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
 | D7  | §8.2.1  | Minor          | Resolved        | Error on unresolved Route targets without Resolver |
 | D10 | §7.3    | Minor (spec)   | Resolved        | Field Accept/MaxSize/Multiple now documented in spec |

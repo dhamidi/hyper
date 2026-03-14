@@ -97,6 +97,7 @@ defaults := hyper.ActionValues(action)
 ```go
 hyper.JSONCodec()            // RepresentationCodec for application/json
 hyper.HTMLCodec()            // RepresentationCodec for text/html
+hyper.MarkdownCodec()        // RepresentationCodec for text/markdown
 hyper.JSONSubmissionCodec()  // SubmissionCodec for application/json
 hyper.FormSubmissionCodec()  // SubmissionCodec for application/x-www-form-urlencoded
 ```

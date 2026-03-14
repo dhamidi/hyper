@@ -12,6 +12,7 @@ import "github.com/dhamidi/hyper"
 
 jsonCodec := hyper.JSONCodec()            // encodes Representation as JSON
 htmlCodec := hyper.HTMLCodec()            // encodes Representation as semantic HTML
+mdCodec   := hyper.MarkdownCodec()       // encodes Representation as Markdown
 jsonSub   := hyper.JSONSubmissionCodec()  // decodes and encodes JSON request bodies
 formSub   := hyper.FormSubmissionCodec()  // decodes and encodes form-urlencoded request bodies
 ```
@@ -29,6 +30,22 @@ The HTML codec renders representations as semantic HTML:
 The codec supports both `RenderDocument` (full HTML page with `<!DOCTYPE>`)
 and `RenderFragment` (just the `<article>` element) modes. All output is
 HTML-escaped to prevent XSS.
+
+## Markdown support
+
+The Markdown codec renders representations as read-oriented Markdown prose:
+
+- **Kind** becomes a top-level `# heading`
+- **Object state** renders as a bulleted list with bold keys (e.g., `- **name:** Ada`)
+- **Collection state** renders as a numbered list
+- **Links** become `[text](url)` Markdown links under a `## Links` heading
+- **Actions** render as descriptive blocks listing the endpoint, fields, types, and options
+- **Embedded representations** render as subsections with `###` headings
+
+This codec is read-oriented and does not support `RenderFragment`/`RenderDocument`
+mode distinction — it always produces a single Markdown document. Use it with
+`RespondAs(w, r, 200, "text/markdown", rep)` or via content negotiation on
+`text/markdown`.
 
 ## JSON:API support
 
