@@ -26,9 +26,11 @@ A `representationToScope` bridge function converts `hyper.Representation` values
 
 HTML views are defined as Vue SFC templates in the `components/` directory:
 
-- **`task-list.vue`** — Full page layout with task list and create form (maps to `Kind: "task-list"`)
-- **`task.vue`** — Single-row task with inline toggle and delete actions (maps to `Kind: "task"`)
-- **`task-form.vue`** — Task creation form with field-driven inputs and validation error display
+- **`page-layout.vue`** — Layout shell for page-wide concerns (style/script includes)
+- **`task-list-content.vue`** — Swappable content region (`#task-list-content`)
+- **`task-list.vue`** — Router component choosing document vs fragment composition
+- **`task-row.vue`** and **`task-actions.vue`** — Semantic task row and action controls
+- **`task-form.vue`** — Task creation form with validation error display
 
 ### Content negotiation
 
@@ -62,6 +64,8 @@ curl -s -X POST http://localhost:8082/tasks \
 
 New tasks default to `pending`; create does not expose a status field.
 
+Validation rule: title must be longer than 3 characters.
+
 ### Toggling task status
 
 ```bash
@@ -76,7 +80,33 @@ curl -i -X DELETE http://localhost:8082/tasks/1 \
   -H 'Accept: application/json'
 ```
 
-For htmx requests (`HX-Request: true`), delete returns an updated `task-list` fragment and swaps `#task-list-root` so list-level state stays consistent.
+For htmx requests (`HX-Request: true`), delete returns an updated `task-list` fragment and swaps `#task-list-content` so list-level state stays consistent.
+
+## Interaction patterns
+
+The UI uses a small set of consistent HTMX interaction contracts:
+
+1. Document load:
+   - `GET /` returns full document composition through `page-layout`.
+   - Layout owns style/script tags and `htmx-config`.
+
+2. Create (HTMX, no refresh):
+   - Create form uses `hx-post="/tasks"` and `hx-swap="none"`.
+   - Server returns a fragment with `hx-swap-oob="outerHTML:#task-list-content"` on the content root.
+   - Browser stays on the same URL; task list and count update via OOB swap.
+
+3. Create validation (422):
+   - If title length is `<= 3`, server returns `422`.
+   - Response includes OOB form replacement (`hx-swap-oob="outerHTML:#task-create-form"`) with an inline error line under the title input.
+   - `htmx-config` allows swapping on `422`.
+
+4. Toggle:
+   - Row action posts to `/tasks/{id}/toggle`.
+   - Response swaps only the affected row (`hx-target="closest li"`, `hx-swap="outerHTML"`).
+
+5. Delete:
+   - Row action submits delete to `/tasks/{id}`.
+   - Response swaps the whole content region (`#task-list-content`) to keep aggregate state (`taskCount`, empty-state message) correct.
 
 ## Architecture
 
@@ -85,7 +115,7 @@ For htmx requests (`HX-Request: true`), delete returns an updated `task-list` fr
 - **htmlcCodec**: A custom `RepresentationCodec` that maps `Representation.Kind` to a Vue SFC component name and uses `representationToScope` to bridge the representation into template data.
 - **representationToScope**: Converts structured `hyper.Representation` fields into flat `map[string]any` scopes with resolved URLs, flattened state, and pre-filtered htmx attributes.
 - **RenderMode**: The `HX-Request` header drives fragment vs. document rendering — htmx requests get bare component markup, full page loads get a complete HTML document.
-- **htmx integration**: Toggle and delete actions include htmx hint attributes (`hx-post`, `hx-delete`, `hx-target`, `hx-swap`) rendered via `v-bind` in templates. Delete swaps `#task-list-root` with a refreshed list fragment.
+- **htmx integration**: Actions include htmx hint attributes (`hx-post`, `hx-delete`, `hx-target`, `hx-swap`) rendered via `v-bind` in templates. Create uses OOB content swaps and form OOB rerender on validation errors; delete swaps `#task-list-content`.
 - **Compact task rows**: Each task is rendered as a dense single row with title/status on the left and action buttons on the right.
 - **Method override**: DELETE actions are rendered as POST forms with a hidden `_method=DELETE` field. The `methodoverride.Wrap` middleware translates these back to DELETE requests.
 - **Typewriter styling**: A custom `style.css` provides a monospace, cream-background aesthetic inspired by typewritten pages.
