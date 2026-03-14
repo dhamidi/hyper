@@ -520,6 +520,21 @@ func TestJSONCodec_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestJSONCodec_RouteOnlyTarget_NoResolver_ReturnsError(t *testing.T) {
+	rep := Representation{
+		Self: &Target{Route: &RouteRef{Name: "items"}},
+	}
+	var buf bytes.Buffer
+	codec := JSONCodec()
+	err := codec.Encode(context.Background(), &buf, rep, EncodeOptions{})
+	if err == nil {
+		t.Fatal("expected error for route-only target without Resolver, got nil")
+	}
+	if !strings.Contains(err.Error(), "route-only target") {
+		t.Errorf("error = %v, want message containing 'route-only target'", err)
+	}
+}
+
 func TestJSONCodec_RouteRefResolved(t *testing.T) {
 	rep := Representation{
 		Links: []Link{

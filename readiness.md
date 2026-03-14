@@ -148,22 +148,16 @@ match the new default.
 
 #### D7 — Route-only targets silently produce empty href when no Resolver configured
 
-**File:** `json_codec.go`, `resolveTarget` function (line ~95)
+**Status: Resolved**
+
+**File:** `json_codec.go`, `resolveTarget` function (line ~96)
 
 **Spec requirement (§8.2.1):** A resolver SHALL fail when neither URL nor
 Route form is resolvable.
 
-**Current behavior:** When `Resolver` is nil and `Target.URL` is nil (i.e.,
-the target only has a `Route`), `resolveTarget` returns `""` with no error.
-This silently produces empty `"href": ""` in the JSON output.
-
-**Impact:** Representations that use `Route`-based targets without
-configuring a `Resolver` on the `Renderer` will emit malformed JSON with
-empty hrefs. Clients will not be able to follow these links.
-
-**Remediation:** Return an error when a `Route`-only target is encountered
-and no `Resolver` is configured, rather than silently emitting an empty
-string.
+**Resolution:** `resolveTarget` now returns an error when a Route-only target
+is encountered and no `Resolver` is configured, instead of silently returning
+an empty string. This ensures malformed hrefs are caught at encode time.
 
 ---
 
@@ -241,7 +235,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D1  | §12     | SHOULD         | Not implemented | No HTML codec                                     |
 | D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |
 | D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
-| D7  | §8.2.1  | Minor          | Silent failure  | Empty href for unresolved Route targets            |
+| D7  | §8.2.1  | Minor          | Resolved        | Error on unresolved Route targets without Resolver |
 | D10 | §7.3    | Minor (spec)   | Impl ahead      | Field has undocumented Accept/MaxSize/Multiple     |
 | D9  | §18.3   | Minor (spec)   | Spec bug        | Nil-map panic in example code                     |
 

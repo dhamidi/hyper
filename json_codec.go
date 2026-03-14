@@ -104,6 +104,9 @@ func resolveTarget(ctx context.Context, t Target, r Resolver) (string, error) {
 	if t.URL != nil {
 		return t.URL.String(), nil
 	}
+	if t.Route != nil {
+		return "", fmt.Errorf("route-only target %q requires a Resolver", t.Route.Name)
+	}
 	return "", nil
 }
 
