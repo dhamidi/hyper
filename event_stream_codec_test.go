@@ -328,3 +328,115 @@ func TestClient_FetchStream_NonSSEResponse(t *testing.T) {
 func TestEventStreamCodec_ImplementsStreamingCodec(t *testing.T) {
 	var _ StreamingCodec = EventStreamCodec{}
 }
+
+func TestClient_SubmitStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("Method = %q, want POST", r.Method)
+		}
+		if r.Header.Get("Accept") != "text/event-stream" {
+			t.Error("Expected Accept: text/event-stream")
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
+		}
+
+		// Verify body was sent
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "hello") {
+			t.Errorf("body = %q, want to contain 'hello'", string(body))
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "no flusher", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher.Flush()
+
+		codec := EventStreamCodec{}
+		events := []Representation{
+			{Kind: "stream-open", State: Object{"status": Scalar{V: "started"}}},
+			{Kind: "token", State: Object{"text": Scalar{V: "world"}}},
+			{Kind: "stream-close", State: Object{"status": Scalar{V: "done"}}},
+		}
+		for _, rep := range events {
+			codec.EncodeEvent(r.Context(), w, rep, EncodeOptions{})
+			codec.Flush(w)
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	action := Action{
+		Rel:    "submit",
+		Method: http.MethodPost,
+		Target: Path(),
+	}
+
+	ch, err := client.SubmitStream(context.Background(), action, map[string]any{
+		"prompt": "hello",
+	})
+	if err != nil {
+		t.Fatalf("SubmitStream() error = %v", err)
+	}
+
+	var kinds []string
+	for resp := range ch {
+		kinds = append(kinds, resp.Representation.Kind)
+	}
+
+	if len(kinds) != 3 {
+		t.Fatalf("got %d events, want 3: %v", len(kinds), kinds)
+	}
+	if kinds[0] != "stream-open" || kinds[1] != "token" || kinds[2] != "stream-close" {
+		t.Errorf("kinds = %v, want [stream-open token stream-close]", kinds)
+	}
+}
+
+func TestClient_SubmitStream_NonSSEResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"kind":"result","state":{"ok":true}}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	action := Action{
+		Rel:    "submit",
+		Method: http.MethodPost,
+		Target: Path(),
+	}
+
+	ch, err := client.SubmitStream(context.Background(), action, map[string]any{
+		"prompt": "hello",
+	})
+	if err != nil {
+		t.Fatalf("SubmitStream() error = %v", err)
+	}
+
+	var responses []*Response
+	for resp := range ch {
+		responses = append(responses, resp)
+	}
+
+	if len(responses) != 1 {
+		t.Fatalf("got %d responses, want 1", len(responses))
+	}
+	if responses[0].Representation.Kind != "result" {
+		t.Errorf("Kind = %q, want %q", responses[0].Representation.Kind, "result")
+	}
+}

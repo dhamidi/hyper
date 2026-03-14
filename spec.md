@@ -1704,6 +1704,28 @@ and yield a `Response` with the `event:` field mapped to
 `Representation.Kind`. The returned channel is closed when the stream ends or
 the context is cancelled.
 
+### 11.13 Streaming Submit
+
+```go
+// SubmitStream executes an Action with the given field values, expecting
+// a streaming response. It sets Accept: text/event-stream and returns
+// a channel of Response values, one per SSE event.
+func (c *Client) SubmitStream(ctx context.Context, action Action, values map[string]any) (<-chan *Response, error)
+```
+
+The method:
+
+1. Resolves `action.Target` to an absolute URL against `c.BaseURL`.
+2. Selects a `SubmissionCodec` from `c.SubmissionCodecs` based on `action.Consumes`.
+3. Encodes `values` into the request body (or query parameters for GET actions).
+4. Sets the `Accept: text/event-stream` header and `Content-Type` header.
+5. Executes the request via `c.Transport.Do`.
+6. If the response `Content-Type` is `text/event-stream`, spawns a goroutine to
+   decode SSE events and send them on the returned channel.
+7. Otherwise, decodes a single response, sends it on the channel, then closes it.
+
+The returned channel is closed when the stream ends or the context is cancelled.
+
 ## 12. HTML Codec
 
 ### 12.1 HTML Role

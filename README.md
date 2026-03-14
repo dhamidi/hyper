@@ -28,3 +28,9 @@ The current design centers on:
   form element. The `Accept` field constraint renders as an `accept` attribute,
   `Multiple` renders the `multiple` boolean attribute, and `MaxSize` is emitted
   as a `data-max-size` attribute for client-side validation
+- streaming support: `Client.FetchStream` sends a GET with
+  `Accept: text/event-stream` and returns a channel of responses decoded from
+  SSE events. `Client.SubmitStream` does the same for action submissions (POST
+  with a request body), enabling streaming interactions such as AI agent
+  token streams. Both methods fall back to a single-response channel when the
+  server responds with a non-SSE content type

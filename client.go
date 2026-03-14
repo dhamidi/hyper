@@ -355,6 +355,113 @@ func (c *Client) FetchStream(ctx context.Context, target Target) (<-chan *Respon
 	return ch, nil
 }
 
+// SubmitStream executes an Action with the given field values, expecting
+// a streaming response. It sets Accept: text/event-stream and returns a
+// channel of Response values, one per SSE event. The channel is closed when
+// the stream ends or the context is cancelled.
+func (c *Client) SubmitStream(ctx context.Context, action Action, values map[string]any) (<-chan *Response, error) {
+	u, err := c.resolveTarget(action.Target)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: resolve action target: %w", err)
+	}
+
+	method := action.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+
+	var body io.Reader
+	var contentType string
+
+	if strings.EqualFold(method, http.MethodGet) {
+		if len(values) > 0 {
+			q := u.Query()
+			for k, v := range values {
+				q.Set(k, fmt.Sprintf("%v", v))
+			}
+			u.RawQuery = q.Encode()
+		}
+	} else if len(values) > 0 {
+		codec, ct := c.selectSubmissionCodec(action.Consumes)
+		contentType = ct
+		if codec != nil {
+			encoded, encErr := codec.Encode(values)
+			if encErr != nil {
+				return nil, fmt.Errorf("hyper: encode submission: %w", encErr)
+			}
+			body = encoded
+		} else {
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(values); err != nil {
+				return nil, fmt.Errorf("hyper: encode submission: %w", err)
+			}
+			body = &buf
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: create request: %w", err)
+	}
+
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+
+	if err := c.attachCredential(ctx, req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.Transport.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("hyper: execute request: %w", err)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	mt, _, _ := mime.ParseMediaType(ct)
+	if mt != "text/event-stream" {
+		singleResp, err := c.decodeResponse(resp)
+		ch := make(chan *Response, 1)
+		if err == nil {
+			ch <- singleResp
+		}
+		close(ch)
+		return ch, err
+	}
+
+	ch := make(chan *Response)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			rep, err := DecodeEvent(reader)
+			if err != nil {
+				return
+			}
+
+			r := &Response{
+				Representation: rep,
+				StatusCode:     resp.StatusCode,
+				Header:         resp.Header,
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- r:
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
 // Follow is a convenience for Fetch that takes a Link instead of a Target.
 func (c *Client) Follow(ctx context.Context, link Link) (*Response, error) {
 	return c.Fetch(ctx, link.Target)
