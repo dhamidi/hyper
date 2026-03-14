@@ -1,5 +1,6 @@
-// Command tasklist is a task list web app demonstrating the hyper library's
-// built-in HTML codec with a typewriter-inspired design.
+// Command tasklist is a task list web app demonstrating the hyper library
+// with htmlc Vue SFC templates for HTML rendering and hyper's JSON codec
+// for the API.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dhamidi/htmlc"
 	"github.com/dhamidi/hyper"
 	"github.com/dhamidi/hyper/methodoverride"
 )
@@ -172,11 +174,56 @@ func taskListRep(store *TaskStore) hyper.Representation {
 	}
 }
 
+// taskScope converts a Task into a scope map for htmlc templates.
+func taskScope(t Task) map[string]any {
+	return map[string]any{
+		"title":  t.Title,
+		"status": t.Status,
+		"toggleAction": fmt.Sprintf("/tasks/%d/toggle", t.ID),
+		"toggleHints": map[string]any{
+			"hx-post":   fmt.Sprintf("/tasks/%d/toggle", t.ID),
+			"hx-target": "closest article",
+			"hx-swap":   "outerHTML",
+		},
+		"deleteAction": fmt.Sprintf("/tasks/%d", t.ID),
+		"deleteHints": map[string]any{
+			"hx-delete": fmt.Sprintf("/tasks/%d", t.ID),
+			"hx-target": "closest article",
+			"hx-swap":   "outerHTML",
+		},
+	}
+}
+
+// taskListScope builds a scope map for the page template from store data.
+func taskListScope(store *TaskStore, titleValue, titleError string) map[string]any {
+	tasks := store.All()
+	items := make([]map[string]any, len(tasks))
+	for i, t := range tasks {
+		items[i] = taskScope(t)
+	}
+	return map[string]any{
+		"tasks":   items,
+		"noTasks": len(tasks) == 0,
+		"createAction": map[string]any{
+			"titleValue": titleValue,
+			"titleError": titleError,
+			"statusOptions": []map[string]any{
+				{"value": "pending", "label": "Pending", "selected": true},
+				{"value": "done", "label": "Done", "selected": false},
+			},
+		},
+	}
+}
+
 // newMux creates the HTTP handler with all routes.
 func newMux(store *TaskStore) http.Handler {
+	engine, err := htmlc.New(htmlc.Options{ComponentDir: "components"})
+	if err != nil {
+		log.Fatalf("htmlc: %v", err)
+	}
+
 	renderer := hyper.Renderer{
 		Codecs: []hyper.RepresentationCodec{
-			hyper.HTMLCodec(),
 			hyper.JSONCodec(),
 		},
 	}
@@ -188,12 +235,12 @@ func newMux(store *TaskStore) http.Handler {
 	})
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		rep := taskListRep(store)
 		if wantsHTML(r) {
-			writeHTMLDocument(w, r, &renderer, http.StatusOK, rep)
+			scope := taskListScope(store, "", "")
+			writeHTMLDocument(w, engine, http.StatusOK, "page", scope)
 			return
 		}
-		renderer.Respond(w, r, http.StatusOK, rep)
+		renderer.Respond(w, r, http.StatusOK, taskListRep(store))
 	})
 
 	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
@@ -203,8 +250,12 @@ func newMux(store *TaskStore) http.Handler {
 		}
 		title := strings.TrimSpace(r.FormValue("title"))
 		if title == "" {
+			if wantsHTML(r) {
+				scope := taskListScope(store, r.FormValue("title"), "Title is required")
+				writeHTMLDocument(w, engine, http.StatusUnprocessableEntity, "page", scope)
+				return
+			}
 			rep := taskListRep(store)
-			// Re-populate the create action fields with errors.
 			for i, a := range rep.Actions {
 				if a.Name == "create" {
 					rep.Actions[i].Fields = hyper.WithErrors(
@@ -214,10 +265,6 @@ func newMux(store *TaskStore) http.Handler {
 					)
 					break
 				}
-			}
-			if wantsHTML(r) {
-				writeHTMLDocument(w, r, &renderer, http.StatusUnprocessableEntity, rep)
-				return
 			}
 			renderer.Respond(w, r, http.StatusUnprocessableEntity, rep)
 			return
@@ -252,7 +299,10 @@ func newMux(store *TaskStore) http.Handler {
 			return
 		}
 		if wantsHTML(r) {
-			renderer.RespondWithMode(w, r, http.StatusOK, taskRep(t), hyper.RenderFragment)
+			scope := taskScope(t)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			engine.RenderFragment(w, "task-item", scope)
 			return
 		}
 		renderer.Respond(w, r, http.StatusOK, taskRep(t))
@@ -285,10 +335,10 @@ func wantsHTML(r *http.Request) bool {
 }
 
 // writeHTMLDocument renders a full HTML page with custom head (CSS + htmx),
-// delegating the body content to HTMLCodec in fragment mode.
-func writeHTMLDocument(w http.ResponseWriter, r *http.Request, renderer *hyper.Renderer, status int, rep hyper.Representation) {
+// delegating the body content to the htmlc engine.
+func writeHTMLDocument(w http.ResponseWriter, engine *htmlc.Engine, status int, component string, scope map[string]any) {
 	var buf bytes.Buffer
-	renderer.RespondWithMode(nopResponseWriter{&buf}, r, status, rep, hyper.RenderFragment)
+	engine.RenderFragment(&buf, component, scope)
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(status)
@@ -308,16 +358,6 @@ func writeHTMLDocument(w http.ResponseWriter, r *http.Request, renderer *hyper.R
 </html>
 `)
 }
-
-// nopResponseWriter wraps a bytes.Buffer to satisfy http.ResponseWriter,
-// discarding header/status operations so we can capture just the body.
-type nopResponseWriter struct {
-	buf *bytes.Buffer
-}
-
-func (n nopResponseWriter) Header() http.Header         { return http.Header{} }
-func (n nopResponseWriter) WriteHeader(int)              {}
-func (n nopResponseWriter) Write(b []byte) (int, error)  { return n.buf.Write(b) }
 
 func main() {
 	store := NewTaskStore()

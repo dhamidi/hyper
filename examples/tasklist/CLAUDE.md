@@ -1,6 +1,6 @@
 # examples/tasklist
 
-A task list web app demonstrating the hyper library's built-in HTML codec with a typewriter-inspired design.
+A task list web app demonstrating the hyper library with htmlc Vue SFC templates for HTML rendering and hyper's JSON codec for the API.
 
 ## Running
 
