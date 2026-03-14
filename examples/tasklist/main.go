@@ -404,20 +404,23 @@ func newMux(store *TaskStore) http.Handler {
 			return
 		}
 		title := strings.TrimSpace(r.FormValue("title"))
-		if title == "" {
+		if len(title) <= 3 {
 			rep := taskListRep(store)
 			for i, a := range rep.Actions {
 				if a.Name == "create" {
 					rep.Actions[i].Fields = hyper.WithErrors(
 						a.Fields,
 						map[string]any{"title": r.FormValue("title")},
-						map[string]string{"title": "Title is required"},
+						map[string]string{"title": "Title must be longer than 3 characters"},
 					)
+					if r.Header.Get("HX-Request") == "true" {
+						if rep.Actions[i].Hints == nil {
+							rep.Actions[i].Hints = map[string]any{}
+						}
+						rep.Actions[i].Hints["hx-swap-oob"] = "outerHTML:#task-create-form"
+					}
 					break
 				}
-			}
-			if r.Header.Get("HX-Request") == "true" {
-				rep.Hints = map[string]any{"hx-swap-oob": "outerHTML:#task-list-content"}
 			}
 			renderer.RespondWithMode(w, r, http.StatusUnprocessableEntity, rep, renderMode(r))
 			return

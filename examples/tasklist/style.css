@@ -123,6 +123,12 @@ button:active { opacity: 0.7; }
 
 small { display: block; color: #777; font-size: 0.85em; }
 em { color: #8b0000; font-style: normal; }
+.field-error {
+    display: block;
+    margin-top: 0.2em;
+    color: #8b0000;
+    font-size: 0.9em;
+}
 
 section[data-slot] {
     margin: 1.5em 0;

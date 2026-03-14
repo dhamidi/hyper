@@ -228,6 +228,20 @@ func TestCreateTask_EmptyTitle(t *testing.T) {
 	}
 }
 
+func TestCreateTask_ShortTitle(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReq(t, "POST", srv.URL+"/tasks", "application/json", "title=abc")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 422 {
+		t.Fatalf("got status %d, want 422", resp.StatusCode)
+	}
+	if !strings.Contains(body, "Title must be longer than 3 characters") {
+		t.Fatalf("expected validation error, got body: %s", body)
+	}
+}
+
 func TestCreateForm_HasAction(t *testing.T) {
 	srv, _ := testServer(t)
 	resp := doReq(t, "GET", srv.URL+"/", "text/html", "")
@@ -325,6 +339,29 @@ func TestCreateTask_HTMXUsesOOBSwap(t *testing.T) {
 	}
 	if !strings.Contains(body, "Via HTMX") {
 		t.Error("htmx create response should include new task")
+	}
+}
+
+func TestCreateTask_HTMXShortTitleRerendersForm(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "POST", srv.URL+"/tasks", map[string]string{
+		"Accept":     "text/html",
+		"HX-Request": "true",
+	}, "title=abc")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 422 {
+		t.Fatalf("got status %d, want 422", resp.StatusCode)
+	}
+	if !strings.Contains(body, `id="task-create-form"`) {
+		t.Error("htmx validation response should include create form")
+	}
+	if !strings.Contains(body, `hx-swap-oob="outerHTML:#task-create-form"`) {
+		t.Error("htmx validation response should include form OOB swap attribute")
+	}
+	if !strings.Contains(body, "Title must be longer than 3 characters") {
+		t.Error("htmx validation response should include short-title error")
 	}
 }
 
