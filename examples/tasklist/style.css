@@ -19,16 +19,39 @@ h1, h2 {
     margin-bottom: 1em;
 }
 
-article {
+.tasklist-page article {
     margin: 1em 0;
     padding: 0.5em 0;
     border-bottom: 1px dashed #999;
 }
 
-article article {
+.tasklist-page article article {
     padding-left: 1em;
     border-left: 2px solid #ccc;
     border-bottom: 1px dotted #ccc;
+}
+
+.page-header p {
+    color: #666;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: -0.5em 0 1em;
+}
+
+.task-create h2,
+.task-section h2 {
+    margin-bottom: 0.5em;
+}
+
+.task-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.task-empty {
+    margin-top: 0.75em;
+    color: #666;
 }
 
 dl { margin: 0.5em 0; }
@@ -105,8 +128,19 @@ section[data-slot] {
     margin: 1.5em 0;
 }
 
-article[data-kind="task"] {
+.task-item {
+    border-bottom: 1px dashed #999;
     padding: 0.45em 0;
+}
+
+.task-item:last-child {
+    border-bottom: none;
+}
+
+.task-item .task-row {
+    margin: 0;
+    padding: 0;
+    border: none;
 }
 
 .task-row {

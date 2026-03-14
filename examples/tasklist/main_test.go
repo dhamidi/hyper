@@ -88,8 +88,8 @@ func TestListTasks_HTML(t *testing.T) {
 	if !strings.Contains(ct, "text/html") {
 		t.Fatalf("got content-type %q, want text/html", ct)
 	}
-	if !strings.Contains(body, "<article") {
-		t.Error("response does not contain <article")
+	if !strings.Contains(body, `data-kind="task"`) {
+		t.Error("response does not contain task items")
 	}
 	if !strings.Contains(body, "Test task one") {
 		t.Error("response does not contain 'Test task one'")
@@ -273,8 +273,8 @@ func TestHTMXFragment(t *testing.T) {
 	if strings.Contains(body, "<!DOCTYPE") {
 		t.Error("htmx fragment response should not contain DOCTYPE")
 	}
-	if !strings.Contains(body, "<article") {
-		t.Error("htmx fragment response should contain task articles")
+	if !strings.Contains(body, `data-kind="task"`) {
+		t.Error("htmx fragment response should contain task items")
 	}
 }
 

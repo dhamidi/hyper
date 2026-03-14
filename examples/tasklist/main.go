@@ -117,7 +117,7 @@ func taskRep(t Task) hyper.Representation {
 				Target: hyper.Pathf("/tasks/%d/toggle", t.ID),
 				Hints: map[string]any{
 					"hx-post":   fmt.Sprintf("/tasks/%d/toggle", t.ID),
-					"hx-target": "closest article",
+					"hx-target": "closest li",
 					"hx-swap":   "outerHTML",
 				},
 			},
