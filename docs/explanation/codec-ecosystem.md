@@ -33,19 +33,26 @@ HTML-escaped to prevent XSS.
 
 ## Markdown support
 
-The Markdown codec renders representations as read-oriented Markdown prose:
+The Markdown codec renders representations as read-oriented Markdown prose
+(§13.1). Since Markdown has no native form controls, actions are degraded to
+descriptive prose and UI-specific hints are omitted.
 
 - **Kind** becomes a top-level `# heading`
 - **Object state** renders as a bulleted list with bold keys (e.g., `- **name:** Ada`)
 - **Collection state** renders as a numbered list
-- **Links** become `[text](url)` Markdown links under a `## Links` heading
-- **Actions** render as descriptive blocks listing the endpoint, fields, types, and options
-- **Embedded representations** render as subsections with `###` headings
+- **Links** become `[text](url) (rel: rel)` Markdown links under a `## Links` heading
+- **Actions** render as `### Name (METHOD /path)` headings with fields listed as
+  `- name (type, required): "value"`
+- **Embedded representations** render as subsections with `##` slot headings and
+  `###` kind headings
+- **RichText** with `text/markdown` media type passes through directly; other
+  media types render the source in a fenced code block with the media type as
+  language hint
+- **Meta** renders as a `## Meta` section with key-value items
+- **Hints** are omitted (UI-specific, not relevant to Markdown)
 
-This codec is read-oriented and does not support `RenderFragment`/`RenderDocument`
-mode distinction — it always produces a single Markdown document. Use it with
-`RespondAs(w, r, 200, "text/markdown", rep)` or via content negotiation on
-`text/markdown`.
+The codec supports both `RenderDocument` (includes the `Kind` heading) and
+`RenderFragment` (omits the heading, renders state/links/actions only) modes.
 
 ## JSON:API support
 

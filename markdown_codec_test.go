@@ -7,12 +7,17 @@ import (
 	"testing"
 )
 
-func encodeMarkdown(t *testing.T, rep Representation) string {
+func encodeMarkdown(t *testing.T, rep Representation, mode ...RenderMode) string {
 	t.Helper()
 	var buf bytes.Buffer
 	codec := MarkdownCodec()
+	m := RenderDocument
+	if len(mode) > 0 {
+		m = mode[0]
+	}
 	err := codec.Encode(context.Background(), &buf, rep, EncodeOptions{
 		Resolver: mockResolver{},
+		Mode:     m,
 	})
 	if err != nil {
 		t.Fatalf("Markdown Encode failed: %v", err)
@@ -75,10 +80,10 @@ func TestMarkdownCodec_Links(t *testing.T) {
 	if !strings.Contains(md, "## Links") {
 		t.Error("expected Links heading")
 	}
-	if !strings.Contains(md, "[Contacts](/contacts)") {
-		t.Error("expected markdown link with title")
+	if !strings.Contains(md, "[Contacts](/contacts) (rel: self)") {
+		t.Error("expected markdown link with title and rel")
 	}
-	if !strings.Contains(md, "[next](/contacts?page=2)") {
+	if !strings.Contains(md, "[next](/contacts?page=2) (rel: next)") {
 		t.Error("expected markdown link with rel as fallback label")
 	}
 }
@@ -91,30 +96,21 @@ func TestMarkdownCodec_Actions(t *testing.T) {
 				Method: "POST",
 				Target: Target{URL: mustParseURL("/contacts")},
 				Fields: []Field{
-					{Name: "name", Type: "text", Required: true, Label: "Full Name"},
+					{Name: "name", Type: "text", Required: true},
 					{Name: "email", Type: "email", Value: "ada@example.com"},
 				},
 			},
 		},
 	}
 	md := encodeMarkdown(t, rep)
-	if !strings.Contains(md, "## Create Contact") {
-		t.Error("expected action name as heading")
+	if !strings.Contains(md, "### Create Contact (POST /contacts)") {
+		t.Error("expected action heading with method and target")
 	}
-	if !strings.Contains(md, "`POST /contacts`") {
-		t.Error("expected endpoint description")
+	if !strings.Contains(md, "- name (text, required)") {
+		t.Error("expected field with type and required")
 	}
-	if !strings.Contains(md, "**Full Name**") {
-		t.Error("expected field label")
-	}
-	if !strings.Contains(md, "`text`") {
-		t.Error("expected field type")
-	}
-	if !strings.Contains(md, "required") {
-		t.Error("expected required marker")
-	}
-	if !strings.Contains(md, "default: `ada@example.com`") {
-		t.Error("expected default value")
+	if !strings.Contains(md, `- email (email): "ada@example.com"`) {
+		t.Error("expected field with default value")
 	}
 }
 
@@ -198,8 +194,8 @@ func TestMarkdownCodec_RouteTarget(t *testing.T) {
 		},
 	}
 	md := encodeMarkdown(t, rep)
-	if !strings.Contains(md, "[item](/resolved/items)") {
-		t.Error("expected resolved route in markdown link")
+	if !strings.Contains(md, "[item](/resolved/items) (rel: item)") {
+		t.Error("expected resolved route in markdown link with rel")
 	}
 }
 
@@ -210,7 +206,7 @@ func TestMarkdownCodec_EmptyRepresentation(t *testing.T) {
 	}
 }
 
-func TestMarkdownCodec_RichTextState(t *testing.T) {
+func TestMarkdownCodec_RichTextMarkdownPassthrough(t *testing.T) {
 	rep := Representation{
 		State: Object{
 			"bio": RichText{MediaType: "text/markdown", Source: "# Hello"},
@@ -218,6 +214,54 @@ func TestMarkdownCodec_RichTextState(t *testing.T) {
 	}
 	md := encodeMarkdown(t, rep)
 	if !strings.Contains(md, "**bio:** # Hello") {
-		t.Error("expected richtext source inline")
+		t.Error("expected markdown richtext source passed through inline")
+	}
+}
+
+func TestMarkdownCodec_RichTextOtherFencedBlock(t *testing.T) {
+	rep := Representation{
+		State: Object{
+			"code": RichText{MediaType: "text/html", Source: "<b>bold</b>"},
+		},
+	}
+	md := encodeMarkdown(t, rep)
+	if !strings.Contains(md, "```text/html") {
+		t.Error("expected fenced code block with media type hint")
+	}
+	if !strings.Contains(md, "<b>bold</b>") {
+		t.Error("expected source in fenced code block")
+	}
+}
+
+func TestMarkdownCodec_RenderFragmentOmitsHeading(t *testing.T) {
+	rep := Representation{
+		Kind:  "contact",
+		State: Object{"name": Scalar{V: "Ada"}},
+	}
+	md := encodeMarkdown(t, rep, RenderFragment)
+	if strings.Contains(md, "# contact") {
+		t.Error("expected Kind heading omitted in RenderFragment mode")
+	}
+	if !strings.Contains(md, "**name:** Ada") {
+		t.Error("expected state still rendered in RenderFragment mode")
+	}
+}
+
+func TestMarkdownCodec_Meta(t *testing.T) {
+	rep := Representation{
+		Meta: map[string]any{
+			"version": "1.0",
+			"author":  "Ada",
+		},
+	}
+	md := encodeMarkdown(t, rep)
+	if !strings.Contains(md, "## Meta") {
+		t.Error("expected Meta heading")
+	}
+	if !strings.Contains(md, "**author:** Ada") {
+		t.Error("expected author meta")
+	}
+	if !strings.Contains(md, "**version:** 1.0") {
+		t.Error("expected version meta")
 	}
 }

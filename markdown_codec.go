@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -14,12 +15,20 @@ type mdRepCodec struct{}
 // as Markdown. Links become [text](url) links, actions become descriptive
 // blocks listing fields and their types, and state values are rendered as
 // Markdown prose.
+//
+// Markdown is treated as a read-oriented alternate representation per §13.1.
+// Actions are degraded to descriptive prose since Markdown has no native form
+// controls. UI-specific hints are omitted.
+//
+// In RenderDocument mode (the default), the Kind field is rendered as a
+// top-level heading. In RenderFragment mode, the heading is omitted and
+// only state, links, actions, and embedded sections are rendered.
 func MarkdownCodec() RepresentationCodec { return mdRepCodec{} }
 
 func (mdRepCodec) MediaTypes() []string { return []string{"text/markdown"} }
 
 func (c mdRepCodec) Encode(ctx context.Context, w io.Writer, rep Representation, opts EncodeOptions) error {
-	if rep.Kind != "" {
+	if rep.Kind != "" && opts.Mode != RenderFragment {
 		if _, err := fmt.Fprintf(w, "# %s\n\n", rep.Kind); err != nil {
 			return err
 		}
@@ -49,6 +58,12 @@ func (c mdRepCodec) Encode(ctx context.Context, w io.Writer, rep Representation,
 		}
 	}
 
+	if len(rep.Meta) > 0 {
+		if err := mdWriteMeta(w, rep.Meta); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -64,8 +79,13 @@ func mdWriteState(w io.Writer, n Node) error {
 }
 
 func mdWriteObjectState(w io.Writer, o Object) error {
-	for k, v := range o {
-		val := mdFormatValue(v)
+	keys := make([]string, 0, len(o))
+	for k := range o {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		val := mdFormatValue(o[k])
 		if _, err := fmt.Fprintf(w, "- **%s:** %s\n", k, val); err != nil {
 			return err
 		}
@@ -94,7 +114,11 @@ func mdFormatValue(v Value) string {
 	case Scalar:
 		return fmt.Sprintf("%v", val.V)
 	case RichText:
-		return val.Source
+		if val.MediaType == "text/markdown" {
+			return val.Source
+		}
+		lang := val.MediaType
+		return fmt.Sprintf("\n```%s\n%s\n```", lang, val.Source)
 	default:
 		return ""
 	}
@@ -113,7 +137,7 @@ func mdWriteLinks(ctx context.Context, w io.Writer, links []Link, opts EncodeOpt
 		if label == "" {
 			label = l.Rel
 		}
-		if _, err := fmt.Fprintf(w, "- [%s](%s)\n", label, href); err != nil {
+		if _, err := fmt.Fprintf(w, "- [%s](%s) (rel: %s)\n", label, href, l.Rel); err != nil {
 			return err
 		}
 	}
@@ -135,21 +159,13 @@ func mdWriteActions(ctx context.Context, w io.Writer, actions []Action, opts Enc
 			method = "POST"
 		}
 
-		if _, err := fmt.Fprintf(w, "## %s\n\n", a.Name); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "- **Endpoint:** `%s %s`\n", method, href); err != nil {
+		if _, err := fmt.Fprintf(w, "### %s (%s %s)\n\n", a.Name, method, href); err != nil {
 			return err
 		}
 
-		if len(a.Fields) > 0 {
-			if _, err := io.WriteString(w, "- **Fields:**\n"); err != nil {
+		for _, f := range a.Fields {
+			if err := mdWriteField(w, f); err != nil {
 				return err
-			}
-			for _, f := range a.Fields {
-				if err := mdWriteField(w, f); err != nil {
-					return err
-				}
 			}
 		}
 		if _, err := io.WriteString(w, "\n"); err != nil {
@@ -165,26 +181,24 @@ func mdWriteField(w io.Writer, f Field) error {
 		fieldType = "text"
 	}
 
-	label := f.Label
-	if label == "" {
-		label = f.Name
-	}
-
-	var parts []string
-	parts = append(parts, fmt.Sprintf("`%s`", fieldType))
+	var attrs []string
+	attrs = append(attrs, fieldType)
 	if f.Required {
-		parts = append(parts, "required")
+		attrs = append(attrs, "required")
 	}
 	if f.ReadOnly {
-		parts = append(parts, "read-only")
-	}
-	if f.Value != nil {
-		parts = append(parts, fmt.Sprintf("default: `%v`", f.Value))
+		attrs = append(attrs, "read-only")
 	}
 
-	attrs := strings.Join(parts, ", ")
-	if _, err := fmt.Fprintf(w, "  - **%s** (%s)\n", label, attrs); err != nil {
-		return err
+	desc := strings.Join(attrs, ", ")
+	if f.Value != nil {
+		if _, err := fmt.Fprintf(w, "- %s (%s): %q\n", f.Name, desc, fmt.Sprintf("%v", f.Value)); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(w, "- %s (%s)\n", f.Name, desc); err != nil {
+			return err
+		}
 	}
 
 	if len(f.Options) > 0 {
@@ -197,14 +211,14 @@ func mdWriteField(w io.Writer, f Field) error {
 			if o.Selected {
 				marker = "x"
 			}
-			if _, err := fmt.Fprintf(w, "    - [%s] %s\n", marker, optLabel); err != nil {
+			if _, err := fmt.Fprintf(w, "  - [%s] %s\n", marker, optLabel); err != nil {
 				return err
 			}
 		}
 	}
 
 	if f.Help != "" {
-		if _, err := fmt.Fprintf(w, "    - *%s*\n", f.Help); err != nil {
+		if _, err := fmt.Fprintf(w, "  - *%s*\n", f.Help); err != nil {
 			return err
 		}
 	}
@@ -213,12 +227,17 @@ func mdWriteField(w io.Writer, f Field) error {
 }
 
 func mdWriteEmbedded(ctx context.Context, w io.Writer, embedded map[string][]Representation, opts EncodeOptions) error {
-	for slot, reps := range embedded {
+	slots := make([]string, 0, len(embedded))
+	for slot := range embedded {
+		slots = append(slots, slot)
+	}
+	sort.Strings(slots)
+	for _, slot := range slots {
+		reps := embedded[slot]
 		if _, err := fmt.Fprintf(w, "## %s\n\n", slot); err != nil {
 			return err
 		}
 		for _, r := range reps {
-			// Render embedded representations with kind as h3
 			if r.Kind != "" {
 				if _, err := fmt.Fprintf(w, "### %s\n\n", r.Kind); err != nil {
 					return err
@@ -240,6 +259,26 @@ func mdWriteEmbedded(ctx context.Context, w io.Writer, embedded map[string][]Rep
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func mdWriteMeta(w io.Writer, meta map[string]any) error {
+	if _, err := io.WriteString(w, "## Meta\n\n"); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, err := fmt.Fprintf(w, "- **%s:** %v\n", k, meta[k]); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, "\n"); err != nil {
+		return err
 	}
 	return nil
 }
