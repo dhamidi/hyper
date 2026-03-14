@@ -676,6 +676,23 @@ func decodeField(m map[string]any) Field {
 	if mul, ok := m["multiple"].(bool); ok {
 		f.Multiple = mul
 	}
+	if opts, ok := m["options"].([]any); ok {
+		for _, o := range opts {
+			if om, ok := o.(map[string]any); ok {
+				var opt Option
+				if v, ok := om["value"].(string); ok {
+					opt.Value = v
+				}
+				if l, ok := om["label"].(string); ok {
+					opt.Label = l
+				}
+				if s, ok := om["selected"].(bool); ok {
+					opt.Selected = s
+				}
+				f.Options = append(f.Options, opt)
+			}
+		}
+	}
 	return f
 }
 

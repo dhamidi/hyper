@@ -492,6 +492,43 @@ func TestDecodeField_FileFieldConstraints(t *testing.T) {
 	}
 }
 
+func TestDecodeField_Options(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"actions": [{
+				"name": "choose",
+				"method": "POST",
+				"fields": [{
+					"name": "color",
+					"type": "select",
+					"options": [
+						{"value": "red", "label": "Red"},
+						{"value": "blue", "label": "Blue", "selected": true}
+					]
+				}]
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	resp, err := c.Fetch(context.Background(), Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := resp.Representation.Actions[0].Fields[0]
+	if len(f.Options) != 2 {
+		t.Fatalf("Options length = %d, want 2", len(f.Options))
+	}
+	if f.Options[0].Value != "red" || f.Options[0].Label != "Red" {
+		t.Errorf("Options[0] = %+v, want {red Red false}", f.Options[0])
+	}
+	if f.Options[1].Value != "blue" || !f.Options[1].Selected {
+		t.Errorf("Options[1] = %+v, want {blue Blue true}", f.Options[1])
+	}
+}
+
 // mockCredentialStore is a simple in-memory credential store for testing.
 type mockCredentialStore struct {
 	cred Credential

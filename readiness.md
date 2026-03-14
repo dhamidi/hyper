@@ -21,25 +21,19 @@ SHOULD-level compliance items.
 
 #### D8 — JSON wire format decoder does not decode Field.Options (§14.3.4)
 
-**File:** `client.go`, `decodeField` function (line ~644)
+**Status: Resolved**
+
+**File:** `client.go`, `decodeField` function
 
 **Spec requirement (§14.3.4):** Fields SHALL be encoded as JSON objects
 including an `"options"` array of `{"value", "label", "selected"}` objects.
 Round-tripping requires the decoder to reconstruct `Field.Options` from this
 wire format.
 
-**Current behavior:** `decodeField` decodes `name`, `type`, `value`,
-`required`, `readOnly`, `label`, `help`, `error`, `accept`, `maxSize`, and
-`multiple` — but never reads the `"options"` key. Any `Field.Options` present
-in the JSON response are silently dropped.
-
-**Impact:** Clients that fetch representations with select/checkbox-group
-fields will see empty `Options` slices, breaking UI rendering and form
-pre-population.
-
-**Remediation:** Add an `"options"` clause to `decodeField` that iterates
-the JSON array and constructs `[]Option` values (mirroring the encode path
-in `encodeFields`).
+**Resolution:** Added an `"options"` clause to `decodeField` that iterates
+the JSON array and constructs `[]Option` values, mirroring the encode path
+in `encodeFields`. Field options are now correctly round-tripped through
+encode/decode.
 
 ---
 
@@ -264,7 +258,7 @@ before the loop, or initialize it lazily inside the `if` block.
 
 | ID  | Section | Severity       | Status         | Summary                                           |
 |-----|---------|----------------|----------------|---------------------------------------------------|
-| D8  | §14.3.4 | Bug            | Not implemented | Decoder drops Field.Options                       |
+| D8  | §14.3.4 | Bug            | Resolved        | Decoder now decodes Field.Options                 |
 | D3  | §8.1    | Bug            | Not implemented | Client ignores Target.Query                       |
 | D4  | §11.4.2 | Architectural  | Not implemented | Submit hardcodes JSON, ignores SubmissionCodecs    |
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
