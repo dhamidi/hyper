@@ -29,3 +29,4 @@ See `use-cases/AGENTS.md` for conventions on writing use-case exploration docume
 - `docs/` — Documentation (explanation, how-to, reference, tutorials)
 - `use-cases/` — Use-case exploration documents
 - `internal/` — Internal driver programs (not for external use)
+- `examples/` — Example applications (separate Go modules with `replace` directives)

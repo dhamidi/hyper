@@ -34,3 +34,18 @@ The current design centers on:
   with a request body), enabling streaming interactions such as AI agent
   token streams. Both methods fall back to a single-response channel when the
   server responds with a non-SSE content type
+
+## Examples
+
+### Task List
+
+A task list web app demonstrating the built-in HTML codec with a
+typewriter-inspired design, htmx integration, and content negotiation.
+
+```bash
+cd examples/tasklist
+go run .
+# Open http://localhost:8080
+```
+
+See [`examples/tasklist/README.md`](./examples/tasklist/README.md) for details.

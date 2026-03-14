@@ -1,0 +1,106 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Courier New', Courier, monospace;
+    background: #f5f0e8;
+    color: #2c2c2c;
+    line-height: 1.8;
+    padding: 2rem;
+    max-width: 640px;
+    margin: 0 auto;
+}
+
+h1, h2 {
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    border-bottom: 2px solid #2c2c2c;
+    padding-bottom: 0.25em;
+    margin-bottom: 1em;
+}
+
+article {
+    margin: 1em 0;
+    padding: 0.5em 0;
+    border-bottom: 1px dashed #999;
+}
+
+article article {
+    padding-left: 1em;
+    border-left: 2px solid #ccc;
+    border-bottom: 1px dotted #ccc;
+}
+
+dl { margin: 0.5em 0; }
+dt { font-weight: bold; display: inline; }
+dt::after { content: ': '; }
+dd { display: inline; margin: 0; }
+dd::after { content: '\A'; white-space: pre; }
+
+nav a {
+    color: #2c2c2c;
+    text-decoration: none;
+    border-bottom: 1px solid #2c2c2c;
+    margin-right: 1em;
+}
+nav a:hover { border-bottom-width: 2px; }
+
+form {
+    margin: 1em 0;
+    padding: 1em 0;
+}
+
+label {
+    display: block;
+    margin: 0.75em 0 0.25em;
+    font-weight: bold;
+}
+
+input[type="text"],
+input[type="email"],
+textarea,
+select {
+    font-family: inherit;
+    font-size: inherit;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #2c2c2c;
+    padding: 0.25em 0;
+    width: 100%;
+    color: #2c2c2c;
+    outline: none;
+}
+
+input:focus, textarea:focus, select:focus {
+    border-bottom-width: 2px;
+}
+
+textarea { min-height: 4em; resize: vertical; }
+
+button, input[type="submit"] {
+    font-family: inherit;
+    font-size: inherit;
+    background: transparent;
+    border: 1px solid #2c2c2c;
+    padding: 0.25em 1em;
+    cursor: pointer;
+    margin-top: 0.5em;
+    color: #2c2c2c;
+}
+
+button:hover {
+    background: #2c2c2c;
+    color: #f5f0e8;
+}
+
+button:active { opacity: 0.7; }
+
+.destructive { color: #8b0000; border-color: #8b0000; }
+.destructive:hover { background: #8b0000; color: #f5f0e8; }
+
+small { display: block; color: #777; font-size: 0.85em; }
+em { color: #8b0000; font-style: normal; }
+
+section[data-slot] {
+    margin: 1.5em 0;
+}
