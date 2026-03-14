@@ -142,16 +142,16 @@ func taskListRep(store *TaskStore) hyper.Representation {
 
 	return hyper.Representation{
 		Kind:  "task-list",
-		Self:  hyper.Path("/").Ptr(),
+		Self:  hyper.Path().Ptr(),
 		State: hyper.StateFrom("taskCount", len(tasks)),
 		Links: []hyper.Link{
-			hyper.NewLink("self", hyper.Path("/")),
+			hyper.NewLink("self", hyper.Path()),
 		},
 		Actions: []hyper.Action{
 			{
 				Name:   "create",
 				Method: "POST",
-				Target: hyper.Path("/tasks"),
+				Target: hyper.Pathf("/tasks"),
 				Fields: []hyper.Field{
 					{Name: "title", Type: "text", Required: true, Label: "Title"},
 					{

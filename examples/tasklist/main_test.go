@@ -198,6 +198,15 @@ func TestCreateTask_EmptyTitle(t *testing.T) {
 	}
 }
 
+func TestCreateForm_HasAction(t *testing.T) {
+	srv, _ := testServer(t)
+	resp := doReq(t, "GET", srv.URL+"/", "text/html", "")
+	body := readBody(t, resp)
+	if !strings.Contains(body, `action="/tasks"`) {
+		t.Errorf("create form should have action=\"/tasks\", got body:\n%s", body)
+	}
+}
+
 func TestContentNegotiation(t *testing.T) {
 	srv, _ := testServer(t)
 
