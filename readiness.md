@@ -37,26 +37,19 @@ encode/decode.
 
 ---
 
-#### D3 — Client.resolveTarget ignores Target.Query (§8.1)
+#### D3 — Client.resolveTarget ignores Target.Query (§8.1) — Resolved
 
-**File:** `client.go`, `resolveTarget` method (line ~346)
+**File:** `client.go`, `resolveTarget` method
 
 **Spec requirement (§8.1):** `Query` MAY contain query parameters to be
 appended to the resolved URL. Resolvers SHALL append `Query` to the URL
 when non-nil.
 
-**Current behavior:** `Client.resolveTarget` checks only `Target.URL`,
-resolves it against `BaseURL`, and returns. It never inspects `Target.Query`
-(or `Target.Route.Query`). Query parameters set via `WithQuery()` are lost
-in all client operations (`Fetch`, `Submit`, `Follow`, `FetchStream`).
-
-**Impact:** Pagination links constructed with
-`hyper.Path("contacts").WithQuery(url.Values{"page": {"3"}})` will fetch
-`/contacts` instead of `/contacts?page=3`.
-
-**Remediation:** After resolving the base URL, merge `Target.Query` (and
-`Target.Route.Query` if applicable) into the resolved URL's query string
-before returning.
+**Resolution:** `resolveTarget` now merges `Target.Query` and
+`Target.Route.Query` into the resolved URL's query string before returning.
+Pagination links constructed with
+`hyper.Path("contacts").WithQuery(url.Values{"page": {"3"}})` now correctly
+resolve to `/contacts?page=3`.
 
 ---
 
@@ -259,7 +252,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | ID  | Section | Severity       | Status         | Summary                                           |
 |-----|---------|----------------|----------------|---------------------------------------------------|
 | D8  | §14.3.4 | Bug            | Resolved        | Decoder now decodes Field.Options                 |
-| D3  | §8.1    | Bug            | Not implemented | Client ignores Target.Query                       |
+| D3  | §8.1    | Bug            | Resolved        | Client now merges Target.Query into resolved URL  |
 | D4  | §11.4.2 | Architectural  | Not implemented | Submit hardcodes JSON, ignores SubmissionCodecs    |
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
 | D1  | §12     | SHOULD         | Not implemented | No HTML codec                                     |

@@ -547,3 +547,66 @@ func (m *mockCredentialStore) Delete(_ context.Context, _ *url.URL) error {
 	m.cred = Credential{}
 	return nil
 }
+
+func TestFetch_WithQuery(t *testing.T) {
+	var gotURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "list"})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	_, err := c.Fetch(context.Background(), Path("contacts").WithQuery(url.Values{"page": {"3"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotURL != "/contacts?page=3" {
+		t.Errorf("URL = %q, want /contacts?page=3", gotURL)
+	}
+}
+
+func TestResolveTarget_MergesQueryParams(t *testing.T) {
+	c, _ := NewClient("http://example.com/api")
+
+	// URL target with query
+	u, err := c.resolveTarget(Path("contacts").WithQuery(url.Values{"page": {"3"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("page"); got != "3" {
+		t.Errorf("page = %q, want 3", got)
+	}
+	if got := u.Path; got != "/contacts" {
+		t.Errorf("path = %q, want /contacts", got)
+	}
+
+	// Route target with Route.Query
+	routeTarget := Target{
+		Route: &RouteRef{Name: "contacts.list", Query: url.Values{"sort": {"name"}}},
+	}
+	u2, err := c.resolveTarget(routeTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u2.Query().Get("sort"); got != "name" {
+		t.Errorf("sort = %q, want name", got)
+	}
+
+	// Both Target.Query and Route.Query merged
+	routeTarget2 := Target{
+		Route: &RouteRef{Name: "contacts.list", Query: url.Values{"sort": {"name"}}},
+		Query: url.Values{"page": {"2"}},
+	}
+	u3, err := c.resolveTarget(routeTarget2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u3.Query().Get("sort"); got != "name" {
+		t.Errorf("sort = %q, want name", got)
+	}
+	if got := u3.Query().Get("page"); got != "2" {
+		t.Errorf("page = %q, want 2", got)
+	}
+}

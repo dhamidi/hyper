@@ -343,14 +343,49 @@ func (c *Client) Follow(ctx context.Context, link Link) (*Response, error) {
 }
 
 // resolveTarget resolves a Target to an absolute URL against BaseURL.
+// Query parameters from Target.Query and Target.Route.Query are appended
+// to the resolved URL (§8.1).
 func (c *Client) resolveTarget(t Target) (*url.URL, error) {
+	var resolved *url.URL
 	if t.URL == nil {
-		return c.BaseURL, nil
+		resolved = c.BaseURL
+	} else if t.URL.IsAbs() {
+		resolved = t.URL
+	} else {
+		resolved = c.BaseURL.ResolveReference(t.URL)
 	}
-	if t.URL.IsAbs() {
-		return t.URL, nil
+
+	// Merge query parameters from Target.Query and Route.Query.
+	var extra url.Values
+	if t.Query != nil {
+		extra = t.Query
 	}
-	return c.BaseURL.ResolveReference(t.URL), nil
+	if t.Route != nil && t.Route.Query != nil {
+		if extra == nil {
+			extra = t.Route.Query
+		} else {
+			for k, vs := range t.Route.Query {
+				for _, v := range vs {
+					extra.Add(k, v)
+				}
+			}
+		}
+	}
+
+	if extra != nil {
+		// Copy to avoid mutating the original URL.
+		u := *resolved
+		q := u.Query()
+		for k, vs := range extra {
+			for _, v := range vs {
+				q.Add(k, v)
+			}
+		}
+		u.RawQuery = q.Encode()
+		resolved = &u
+	}
+
+	return resolved, nil
 }
 
 // attachCredential retrieves a credential from the store and applies it.
