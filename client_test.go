@@ -86,7 +86,7 @@ func TestNewClient_Defaults(t *testing.T) {
 	if len(c.SubmissionCodecs) == 0 {
 		t.Error("SubmissionCodecs is empty")
 	}
-	if c.Accept != "application/json" {
+	if c.Accept != "application/vnd.api+json" {
 		t.Errorf("Accept = %q", c.Accept)
 	}
 }
@@ -131,7 +131,7 @@ func TestFetch_SendsGETWithAccept(t *testing.T) {
 	if gotReq.Method != "GET" {
 		t.Errorf("method = %q, want GET", gotReq.Method)
 	}
-	if got := gotReq.Header.Get("Accept"); got != "application/json" {
+	if got := gotReq.Header.Get("Accept"); got != "application/vnd.api+json" {
 		t.Errorf("Accept = %q", got)
 	}
 	if resp.StatusCode != 200 {

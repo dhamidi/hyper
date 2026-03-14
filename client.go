@@ -113,7 +113,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		Codecs:           []RepresentationCodec{JSONCodec()},
 		SubmissionCodecs: []SubmissionCodec{JSONSubmissionCodec(), FormSubmissionCodec()},
 		BaseURL:          u,
-		Accept:           "application/json",
+		Accept:           "application/vnd.api+json",
 	}
 
 	for _, opt := range opts {

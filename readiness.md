@@ -133,19 +133,16 @@ blocks. This is a SHOULD-level requirement.
 
 #### D5 — Default Accept header is "application/json" vs spec's "application/vnd.api+json"
 
+**Status: Resolved**
+
 **File:** `client.go`, `NewClient` function (line ~116)
 
 **Spec requirement (§11.8, §11.4.1):** The default `Accept` header SHALL
 be `"application/vnd.api+json"`.
 
-**Current behavior:** `NewClient` sets `Accept: "application/json"`.
-
-**Impact:** Servers that content-negotiate based on `Accept` will serve
-native JSON instead of JSON:API format. This is a minor mismatch that
-affects interoperability with JSON:API servers.
-
-**Remediation:** Change the default `Accept` value in `NewClient` to
-`"application/vnd.api+json"`.
+**Resolution:** Changed the default `Accept` value in `NewClient` from
+`"application/json"` to `"application/vnd.api+json"`. Updated tests to
+match the new default.
 
 ---
 
@@ -243,7 +240,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
 | D1  | §12     | SHOULD         | Not implemented | No HTML codec                                     |
 | D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |
-| D5  | §11.8   | Minor          | Misaligned      | Default Accept header mismatch                    |
+| D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
 | D7  | §8.2.1  | Minor          | Silent failure  | Empty href for unresolved Route targets            |
 | D10 | §7.3    | Minor (spec)   | Impl ahead      | Field has undocumented Accept/MaxSize/Multiple     |
 | D9  | §18.3   | Minor (spec)   | Spec bug        | Nil-map panic in example code                     |
