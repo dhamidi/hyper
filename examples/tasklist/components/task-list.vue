@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div id="task-list-root">
     <link rel="stylesheet" href="/style.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <h1>Task List</h1>

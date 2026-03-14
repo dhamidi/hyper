@@ -40,6 +40,16 @@ func (r Renderer) RespondWithMode(w http.ResponseWriter, req *http.Request, stat
 	return r.writeResponse(w, req, status, rep, codec, mediaType, mode)
 }
 
+// NegotiatedMediaType returns the media type selected for this request based
+// on the renderer's registered codecs and the request's Accept header.
+func (r Renderer) NegotiatedMediaType(req *http.Request) (string, bool) {
+	codec, mediaType := r.negotiate(req)
+	if codec == nil {
+		return "", false
+	}
+	return mediaType, true
+}
+
 func (r Renderer) writeResponse(w http.ResponseWriter, req *http.Request, status int, rep Representation, codec RepresentationCodec, mediaType string, mode RenderMode) error {
 	w.Header().Set("Content-Type", mediaType)
 	w.WriteHeader(status)

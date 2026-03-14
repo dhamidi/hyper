@@ -128,7 +128,7 @@ func taskRep(t Task) hyper.Representation {
 				Hints: map[string]any{
 					"destructive": true,
 					"hx-delete":   fmt.Sprintf("/tasks/%d", t.ID),
-					"hx-target":   "closest article",
+					"hx-target":   "#task-list-root",
 					"hx-swap":     "outerHTML",
 				},
 			},
@@ -158,15 +158,6 @@ func taskListRep(store *TaskStore) hyper.Representation {
 				Target: hyper.Pathf("/tasks"),
 				Fields: []hyper.Field{
 					{Name: "title", Type: "text", Required: true, Label: "Title"},
-					{
-						Name:  "status",
-						Type:  "select",
-						Label: "Status",
-						Options: []hyper.Option{
-							{Value: "pending", Label: "Pending", Selected: true},
-							{Value: "done", Label: "Done"},
-						},
-					},
 				},
 			},
 		},
@@ -357,6 +348,14 @@ func renderMode(r *http.Request) hyper.RenderMode {
 	return hyper.RenderDocument
 }
 
+func prefersHTML(r *http.Request, renderer hyper.Renderer) bool {
+	if r.Header.Get("HX-Request") == "true" {
+		return true
+	}
+	mediaType, ok := renderer.NegotiatedMediaType(r)
+	return ok && mediaType == "text/html"
+}
+
 // newMux creates the HTTP handler with all routes.
 func newMux(store *TaskStore) http.Handler {
 	engine, err := htmlc.New(htmlc.Options{ComponentDir: "components"})
@@ -393,7 +392,7 @@ func newMux(store *TaskStore) http.Handler {
 				if a.Name == "create" {
 					rep.Actions[i].Fields = hyper.WithErrors(
 						a.Fields,
-						map[string]any{"title": r.FormValue("title"), "status": r.FormValue("status")},
+						map[string]any{"title": r.FormValue("title")},
 						map[string]string{"title": "Title is required"},
 					)
 					break
@@ -403,17 +402,9 @@ func newMux(store *TaskStore) http.Handler {
 			return
 		}
 
-		status := r.FormValue("status")
-		if status == "" {
-			status = "pending"
-		}
 		t := store.Create(title)
-		if status == "done" {
-			store.Toggle(t.ID)
-			t.Status = "done"
-		}
 
-		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		if prefersHTML(r, renderer) {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
@@ -444,8 +435,8 @@ func newMux(store *TaskStore) http.Handler {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		if strings.Contains(r.Header.Get("Accept"), "text/html") {
-			w.WriteHeader(http.StatusOK)
+		if prefersHTML(r, renderer) {
+			renderer.RespondWithMode(w, r, http.StatusOK, taskListRep(store), renderMode(r))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -461,6 +452,6 @@ func main() {
 	store.Create("Review pull request")
 
 	mux := newMux(store)
-	log.Println("Listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Println("Listening on :8082")
+	log.Fatal(http.ListenAndServe(":8082", mux))
 }

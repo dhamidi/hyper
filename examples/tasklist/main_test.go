@@ -150,6 +150,13 @@ func TestCreateTask(t *testing.T) {
 	if result["kind"] != "task" {
 		t.Errorf("got kind %q, want task", result["kind"])
 	}
+	state, ok := result["state"].(map[string]any)
+	if !ok {
+		t.Fatal("missing state")
+	}
+	if state["status"] != "pending" {
+		t.Errorf("got status %q, want pending", state["status"])
+	}
 
 	// Verify task appears in list
 	resp2 := doReq(t, "GET", srv.URL+"/", "application/json", "")
@@ -228,6 +235,9 @@ func TestCreateForm_HasAction(t *testing.T) {
 	if !strings.Contains(body, `action="/tasks"`) {
 		t.Errorf("create form should have action=\"/tasks\", got body:\n%s", body)
 	}
+	if strings.Contains(body, `name="status"`) {
+		t.Errorf("create form should not include a status field, got body:\n%s", body)
+	}
 }
 
 func TestContentNegotiation(t *testing.T) {
@@ -289,5 +299,44 @@ func TestToggleTask_HTMLFragment(t *testing.T) {
 	}
 	if !strings.Contains(body, "done") {
 		t.Error("toggled task should show status 'done'")
+	}
+}
+
+func TestDeleteTask_HTMLFragmentRefreshesList(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "DELETE", srv.URL+"/tasks/1", map[string]string{
+		"Accept":     "text/html",
+		"HX-Request": "true",
+	}, "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(body, `id="task-list-root"`) {
+		t.Error("delete fragment should return refreshed task-list container")
+	}
+	if strings.Contains(body, "Test task one") {
+		t.Error("deleted task still present in refreshed list")
+	}
+}
+
+func TestDeleteTask_HTMXWithoutAcceptRefreshesList(t *testing.T) {
+	srv, _ := testServer(t)
+
+	resp := doReqWithHeaders(t, "DELETE", srv.URL+"/tasks/1", map[string]string{
+		"HX-Request": "true",
+	}, "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(body, `id="task-list-root"`) {
+		t.Error("htmx delete should return refreshed task-list container")
+	}
+	if strings.Contains(body, "Test task one") {
+		t.Error("deleted task still present in refreshed list")
 	}
 }

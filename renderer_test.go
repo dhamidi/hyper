@@ -211,3 +211,29 @@ func TestRespond_DefaultModeIsRenderDocument(t *testing.T) {
 		t.Fatalf("expected RenderDocument mode, got %v", codec.lastOpts.Mode)
 	}
 }
+
+func TestNegotiatedMediaType(t *testing.T) {
+	json := newMockCodec("application/json", `{"ok":true}`)
+	html := newMockCodec("text/html", `<p>ok</p>`)
+	r := Renderer{Codecs: []RepresentationCodec{json, html}}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept", "text/html, application/json;q=0.8")
+
+	mt, ok := r.NegotiatedMediaType(req)
+	if !ok {
+		t.Fatal("expected negotiated media type")
+	}
+	if mt != "text/html" {
+		t.Fatalf("got media type %q, want text/html", mt)
+	}
+}
+
+func TestNegotiatedMediaType_NoCodecs(t *testing.T) {
+	r := Renderer{}
+	req := httptest.NewRequest("GET", "/", nil)
+
+	if mt, ok := r.NegotiatedMediaType(req); ok || mt != "" {
+		t.Fatalf("expected no media type, got %q (ok=%v)", mt, ok)
+	}
+}

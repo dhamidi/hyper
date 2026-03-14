@@ -104,3 +104,51 @@ em { color: #8b0000; font-style: normal; }
 section[data-slot] {
     margin: 1.5em 0;
 }
+
+article[data-kind="task"] {
+    padding: 0.45em 0;
+}
+
+.task-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75em;
+}
+
+.task-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75em;
+    min-width: 0;
+}
+
+.task-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-status {
+    font-size: 0.85em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #666;
+}
+
+.task-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    flex-shrink: 0;
+}
+
+.task-action-form {
+    margin: 0;
+    padding: 0;
+}
+
+.task-action-form button {
+    margin-top: 0;
+    padding: 0.15em 0.75em;
+}
