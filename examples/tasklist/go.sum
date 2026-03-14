@@ -1,4 +1,6 @@
 github.com/dhamidi/htmlc v0.6.0 h1:WID+iqy0nP27rXCzAR97WJH9wMbw+h26BpD/0zzNeuI=
 github.com/dhamidi/htmlc v0.6.0/go.mod h1:4I7vYtw22kyE3OBn51t7RdSJpSxHtsUVOXRYaWMw/xs=
+github.com/dhamidi/tailwind-go v0.2.1-0.20260314161030-8afd12ed3e9e h1:2+xHsmQcy5QZrpLH5YlnfgVEZN/fLUzo0WtH+U6a8W8=
+github.com/dhamidi/tailwind-go v0.2.1-0.20260314161030-8afd12ed3e9e/go.mod h1:CfhvQbEZTnjfhOqoAy+LwR2/++HkpMKbemTw8x04rXM=
 golang.org/x/net v0.51.0 h1:94R/GTO7mt3/4wIKpcR5gkGmRLOuE/2hNGeWq/GBIFo=
 golang.org/x/net v0.51.0/go.mod h1:aamm+2QF5ogm02fjy5Bb7CQ0WMt1/WVM7FtyaTLlA9Y=

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,38 @@ import (
 	"github.com/dhamidi/htmlc"
 	"github.com/dhamidi/hyper"
 	"github.com/dhamidi/hyper/methodoverride"
+	tailwind "github.com/dhamidi/tailwind-go"
 )
+
+const tailwindThemeCSS = `
+@theme {
+  --spacing: 0.25rem;
+
+  --font-mono: "Courier New", Courier, monospace;
+  --font-weight-semibold: 600;
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-5xl: 3rem;
+  --text-5xl--line-height: 1;
+
+  --color-stone-100: #f5f5f4;
+  --color-zinc-500: #71717a;
+  --color-zinc-700: #3f3f46;
+  --color-zinc-800: #27272a;
+  --color-red-900: #7f1d1d;
+}
+`
 
 // Task represents a single task item.
 type Task struct {
@@ -175,7 +207,8 @@ func taskListRep(store *TaskStore) hyper.Representation {
 // It maps Representation.Kind to a Vue SFC component name and converts the
 // representation into a template scope via representationToScope.
 type htmlcCodec struct {
-	engine *htmlc.Engine
+	engine       *htmlc.Engine
+	tailwindHref string
 }
 
 func (c htmlcCodec) MediaTypes() []string {
@@ -188,6 +221,7 @@ func (c htmlcCodec) Encode(ctx context.Context, w io.Writer, rep hyper.Represent
 		component = "default"
 	}
 	scope := representationToScope(ctx, rep, opts)
+	scope["tailwindHref"] = c.tailwindHref
 	if opts.Mode == hyper.RenderFragment {
 		return c.engine.RenderFragment(w, component, scope)
 	}
@@ -202,6 +236,7 @@ func representationToScope(ctx context.Context, rep hyper.Representation, opts h
 	scope := map[string]any{
 		"kind":           rep.Kind,
 		"renderDocument": opts.Mode == hyper.RenderDocument,
+		"rootHxSwapOob":  "",
 	}
 
 	// Self href
@@ -295,14 +330,10 @@ func representationToScope(ctx context.Context, rep hyper.Representation, opts h
 
 	// Representation-level hints (used for OOB swaps)
 	if len(rep.Hints) > 0 {
-		rootHxAttrs := make(map[string]any)
-		for k, v := range rep.Hints {
-			if strings.HasPrefix(k, "hx-") {
-				rootHxAttrs[k] = v
+		if raw, ok := rep.Hints["hx-swap-oob"]; ok {
+			if s, ok := raw.(string); ok {
+				scope["rootHxSwapOob"] = s
 			}
-		}
-		if len(rootHxAttrs) > 0 {
-			scope["rootHxAttrs"] = rootHxAttrs
 		}
 	}
 
@@ -380,19 +411,31 @@ func newMux(store *TaskStore) http.Handler {
 	if err != nil {
 		log.Fatalf("htmlc: %v", err)
 	}
+	engine.WithMissingPropHandler(htmlc.ErrorOnMissingProp)
+
+	twEngine := tailwind.New()
+	if err := twEngine.LoadCSS([]byte(tailwindThemeCSS)); err != nil {
+		log.Fatalf("tailwind theme: %v", err)
+	}
+	if err := twEngine.Scan(os.DirFS("components")); err != nil {
+		log.Fatalf("tailwind scan: %v", err)
+	}
+	tailwindHandler := tailwind.NewHandler(twEngine)
+	tailwindHandler.Build()
+
+	if tailwindHandler.URL() == "" {
+		log.Fatalf("tailwind: empty stylesheet URL")
+	}
 
 	renderer := hyper.Renderer{
 		Codecs: []hyper.RepresentationCodec{
-			htmlcCodec{engine: engine},
+			htmlcCodec{engine: engine, tailwindHref: tailwindHandler.URL()},
 			hyper.JSONCodec(),
 		},
 	}
 
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /style.css", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "style.css")
-	})
+	mux.Handle("GET "+tailwindHandler.URL(), tailwindHandler)
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		renderer.RespondWithMode(w, r, http.StatusOK, taskListRep(store), renderMode(r))

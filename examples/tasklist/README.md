@@ -118,7 +118,7 @@ The UI uses a small set of consistent HTMX interaction contracts:
 - **htmx integration**: Actions include htmx hint attributes (`hx-post`, `hx-delete`, `hx-target`, `hx-swap`) rendered via `v-bind` in templates. Create uses OOB content swaps and form OOB rerender on validation errors; delete swaps `#task-list-content`.
 - **Compact task rows**: Each task is rendered as a dense single row with title/status on the left and action buttons on the right.
 - **Method override**: DELETE actions are rendered as POST forms with a hidden `_method=DELETE` field. The `methodoverride.Wrap` middleware translates these back to DELETE requests.
-- **Typewriter styling**: A custom `style.css` provides a monospace, cream-background aesthetic inspired by typewritten pages.
+- **Tailwind-go styling**: `github.com/dhamidi/tailwind-go` scans `components/` and serves content-hashed generated CSS. The layout links to `tailwindHandler.URL()` instead of a static stylesheet file.
 
 ## Testing
 
