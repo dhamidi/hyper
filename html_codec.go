@@ -21,6 +21,11 @@ type htmlRepCodec struct{}
 // field containing the original method. Use the methodoverride middleware
 // to interpret this field on the server side.
 //
+// When any field in an action has Type "file", the form element is rendered
+// with enctype="multipart/form-data". The Accept field is emitted as the
+// accept attribute, Multiple as the multiple boolean attribute, and MaxSize
+// as a data-max-size attribute for client-side validation scripts.
+//
 // The codec interprets Hints on both Representation and Action values.
 // String-valued hints are emitted as HTML attributes (e.g., "hx-target"
 // becomes hx-target="…"). The bool hint "destructive" (true) adds
@@ -229,8 +234,21 @@ func writeActions(ctx context.Context, w io.Writer, actions []Action, opts Encod
 			formMethod = "POST"
 		}
 
+		// When any field is a file input, the form must use multipart encoding.
+		hasFileField := false
+		for _, f := range a.Fields {
+			if f.Type == "file" {
+				hasFileField = true
+				break
+			}
+		}
+
 		extra := hintAttrs(a.Hints)
-		if _, err := fmt.Fprintf(w, "<form method=%q action=%q%s>\n", formMethod, escapedHref, extra); err != nil {
+		enctype := ""
+		if hasFileField {
+			enctype = ` enctype="multipart/form-data"`
+		}
+		if _, err := fmt.Fprintf(w, "<form method=%q action=%q%s%s>\n", formMethod, escapedHref, enctype, extra); err != nil {
 			return err
 		}
 		if needsMethodOverride {
@@ -373,6 +391,9 @@ func writeInputField(w io.Writer, f Field, escapedName string) error {
 	}
 	if f.Multiple {
 		attrs.WriteString(" multiple")
+	}
+	if f.MaxSize > 0 {
+		fmt.Fprintf(&attrs, " data-max-size=%q", fmt.Sprintf("%d", f.MaxSize))
 	}
 
 	_, err := fmt.Fprintf(w, "<input %s>\n", attrs.String())

@@ -23,3 +23,8 @@ The current design centers on:
   htmx integration (e.g., `hx-target`, `hx-swap`). The `"destructive"` bool
   hint adds `class="destructive"` and `"hidden"` (bool, true) suppresses
   rendering entirely
+- file upload support in HTML forms: when an action contains a field with
+  `Type: "file"`, the HTML codec sets `enctype="multipart/form-data"` on the
+  form element. The `Accept` field constraint renders as an `accept` attribute,
+  `Multiple` renders the `multiple` boolean attribute, and `MaxSize` is emitted
+  as a `data-max-size` attribute for client-side validation

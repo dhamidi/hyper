@@ -420,6 +420,63 @@ func TestHTMLCodec_FileField(t *testing.T) {
 	}
 }
 
+func TestHTMLCodec_FileField_Enctype(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "upload",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/upload")},
+				Fields: []Field{
+					{Name: "avatar", Type: "file"},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `enctype="multipart/form-data"`) {
+		t.Error("expected enctype=\"multipart/form-data\" on form with file field")
+	}
+}
+
+func TestHTMLCodec_NoFileField_OmitsEnctype(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "create",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/create")},
+				Fields: []Field{
+					{Name: "name", Type: "text"},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if strings.Contains(html, "enctype") {
+		t.Error("form without file fields should not have enctype attribute")
+	}
+}
+
+func TestHTMLCodec_FileField_MaxSize(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "upload",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/upload")},
+				Fields: []Field{
+					{Name: "doc", Type: "file", MaxSize: 5242880},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `data-max-size="5242880"`) {
+		t.Error("expected data-max-size attribute for file field with MaxSize")
+	}
+}
+
 func TestHTMLCodec_ReadOnlyField(t *testing.T) {
 	rep := Representation{
 		Actions: []Action{
