@@ -15,3 +15,6 @@ The current design centers on:
   can be used without modification
 - separate response and submission codecs for HTML, Markdown, JSON, and form
   workflows
+- automatic method override in HTML forms: actions using PUT, DELETE, or PATCH
+  are rendered as POST forms with a hidden `_method` field, paired with the
+  `methodoverride` middleware for server-side interpretation

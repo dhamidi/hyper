@@ -14,6 +14,11 @@ type htmlRepCodec struct{}
 // HTMLCodec returns a RepresentationCodec that encodes representations
 // as semantic HTML. Links become <a> tags, actions become <form> tags
 // with input fields, and state values are rendered as definition lists.
+//
+// Since HTML forms only support GET and POST, actions with other methods
+// (PUT, DELETE, PATCH) are rendered as POST forms with a hidden _method
+// field containing the original method. Use the methodoverride middleware
+// to interpret this field on the server side.
 func HTMLCodec() RepresentationCodec { return htmlRepCodec{} }
 
 func (htmlRepCodec) MediaTypes() []string { return []string{"text/html"} }
@@ -200,8 +205,24 @@ func writeActions(ctx context.Context, w io.Writer, actions []Action, opts Encod
 		escapedHref := template.HTMLEscapeString(href)
 		escapedName := template.HTMLEscapeString(a.Name)
 
-		if _, err := fmt.Fprintf(w, "<form method=%q action=%q>\n", method, escapedHref); err != nil {
+		// HTML forms only support GET and POST. For other methods,
+		// use POST with a hidden _method field (method override).
+		// The server should use the methodoverride middleware to
+		// interpret the _method field.
+		formMethod := method
+		needsMethodOverride := method != "GET" && method != "POST"
+		if needsMethodOverride {
+			formMethod = "POST"
+		}
+
+		if _, err := fmt.Fprintf(w, "<form method=%q action=%q>\n", formMethod, escapedHref); err != nil {
 			return err
+		}
+		if needsMethodOverride {
+			escapedMethod := template.HTMLEscapeString(method)
+			if _, err := fmt.Fprintf(w, "<input type=\"hidden\" name=\"_method\" value=%q>\n", escapedMethod); err != nil {
+				return err
+			}
 		}
 		if _, err := fmt.Fprintf(w, "<h2>%s</h2>\n", escapedName); err != nil {
 			return err

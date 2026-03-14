@@ -164,6 +164,91 @@ func TestHTMLCodec_Actions(t *testing.T) {
 	}
 }
 
+func TestHTMLCodec_MethodOverride_PUT(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Update Contact",
+				Method: "PUT",
+				Target: Target{URL: mustParseURL("/contacts/42")},
+				Fields: []Field{
+					{Name: "name", Type: "text"},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `<form method="POST" action="/contacts/42">`) {
+		t.Error("expected PUT action to render as POST form")
+	}
+	if !strings.Contains(html, `<input type="hidden" name="_method" value="PUT">`) {
+		t.Error("expected hidden _method field with value PUT")
+	}
+}
+
+func TestHTMLCodec_MethodOverride_DELETE(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Delete Contact",
+				Method: "DELETE",
+				Target: Target{URL: mustParseURL("/contacts/42")},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `<form method="POST" action="/contacts/42">`) {
+		t.Error("expected DELETE action to render as POST form")
+	}
+	if !strings.Contains(html, `<input type="hidden" name="_method" value="DELETE">`) {
+		t.Error("expected hidden _method field with value DELETE")
+	}
+}
+
+func TestHTMLCodec_MethodUnchanged_GET(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Search",
+				Method: "GET",
+				Target: Target{URL: mustParseURL("/search")},
+				Fields: []Field{
+					{Name: "q", Type: "text"},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `<form method="GET" action="/search">`) {
+		t.Error("expected GET action to remain as GET form")
+	}
+	if strings.Contains(html, `name="_method"`) {
+		t.Error("GET action should not have _method hidden field")
+	}
+}
+
+func TestHTMLCodec_MethodUnchanged_POST(t *testing.T) {
+	rep := Representation{
+		Actions: []Action{
+			{
+				Name:   "Create",
+				Method: "POST",
+				Target: Target{URL: mustParseURL("/contacts")},
+				Fields: []Field{
+					{Name: "name", Type: "text"},
+				},
+			},
+		},
+	}
+	html := encodeHTML(t, rep, RenderFragment)
+	if !strings.Contains(html, `<form method="POST" action="/contacts">`) {
+		t.Error("expected POST action to remain as POST form")
+	}
+	if strings.Contains(html, `name="_method"`) {
+		t.Error("POST action should not have _method hidden field")
+	}
+}
+
 func TestHTMLCodec_SelectField(t *testing.T) {
 	rep := Representation{
 		Actions: []Action{

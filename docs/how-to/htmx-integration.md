@@ -45,3 +45,21 @@ Hints: map[string]any{
 ```
 
 The HTML codec reads the `hx-*` keys; the CLI codec reads the generic keys.
+
+## Method override for PUT, DELETE, and PATCH
+
+HTML forms only support `GET` and `POST`. When an action uses `PUT`, `DELETE`,
+or `PATCH`, the HTML codec automatically renders the form with `method="POST"`
+and adds a hidden `<input type="hidden" name="_method" value="PUT">` field
+carrying the original method.
+
+To interpret this field on the server, use the `methodoverride` middleware:
+
+```go
+import "github.com/dhamidi/hyper/methodoverride"
+
+handler = methodoverride.Wrap(handler)
+```
+
+This middleware reads the `_method` form field and overrides the request method
+accordingly, so your handlers receive the correct HTTP method.
