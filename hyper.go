@@ -160,8 +160,10 @@ type StreamingCodec interface {
 	Flush(io.Writer) error
 }
 
-// SubmissionCodec decodes submission bodies.
+// SubmissionCodec decodes submission bodies and encodes submission values.
 type SubmissionCodec interface {
 	MediaTypes() []string
 	Decode(context.Context, io.Reader, any, DecodeOptions) error
+	// Encode serializes submission values into a request body.
+	Encode(values map[string]any) (io.Reader, error)
 }

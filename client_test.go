@@ -529,6 +529,95 @@ func TestDecodeField_Options(t *testing.T) {
 	}
 }
 
+// mockSubmissionCodec records the values passed to Encode.
+type mockSubmissionCodec struct {
+	mediaTypes   []string
+	encodedBody  string
+	encodeValues map[string]any
+}
+
+func (m *mockSubmissionCodec) MediaTypes() []string { return m.mediaTypes }
+
+func (m *mockSubmissionCodec) Encode(values map[string]any) (io.Reader, error) {
+	m.encodeValues = values
+	return bytes.NewBufferString(m.encodedBody), nil
+}
+
+func (m *mockSubmissionCodec) Decode(_ context.Context, r io.Reader, dst any, _ DecodeOptions) error {
+	return nil
+}
+
+func TestSubmit_UsesSelectedSubmissionCodec(t *testing.T) {
+	var gotContentType string
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "ok"})
+	}))
+	defer srv.Close()
+
+	mock := &mockSubmissionCodec{
+		mediaTypes:  []string{"application/x-www-form-urlencoded"},
+		encodedBody: "name=test&age=30",
+	}
+
+	c, _ := NewClient(srv.URL, WithSubmissionCodec(mock))
+	action := Action{
+		Method:   "POST",
+		Target:   MustParseTarget(srv.URL + "/submit"),
+		Consumes: []string{"application/x-www-form-urlencoded"},
+	}
+	_, err := c.Submit(context.Background(), action, map[string]any{"name": "test", "age": 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", gotContentType)
+	}
+	if gotBody != "name=test&age=30" {
+		t.Errorf("body = %q, want name=test&age=30", gotBody)
+	}
+	if mock.encodeValues == nil {
+		t.Error("Encode was not called on the custom codec")
+	}
+	if mock.encodeValues["name"] != "test" {
+		t.Errorf("encodeValues[name] = %v, want test", mock.encodeValues["name"])
+	}
+}
+
+func TestSubmit_DefaultsToJSONCodecEncode(t *testing.T) {
+	var gotContentType string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"kind": "ok"})
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(srv.URL)
+	action := Action{
+		Method: "POST",
+		Target: MustParseTarget(srv.URL + "/items"),
+	}
+	_, err := c.Submit(context.Background(), action, map[string]any{"name": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotBody["name"] != "test" {
+		t.Errorf("body name = %v, want test", gotBody["name"])
+	}
+}
+
 // mockCredentialStore is a simple in-memory credential store for testing.
 type mockCredentialStore struct {
 	cred Credential

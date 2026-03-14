@@ -1,6 +1,7 @@
 package hyper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -295,6 +296,16 @@ type jsonSubCodec struct{}
 func JSONSubmissionCodec() SubmissionCodec { return jsonSubCodec{} }
 
 func (jsonSubCodec) MediaTypes() []string { return []string{"application/json"} }
+
+func (jsonSubCodec) Encode(values map[string]any) (io.Reader, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(values); err != nil {
+		return nil, fmt.Errorf("json: %w", err)
+	}
+	return &buf, nil
+}
 
 func (jsonSubCodec) Decode(_ context.Context, r io.Reader, dst any, _ DecodeOptions) error {
 	switch target := dst.(type) {

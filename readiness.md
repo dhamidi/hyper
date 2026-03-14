@@ -57,29 +57,20 @@ resolve to `/contacts?page=3`.
 
 #### D4 — Client.Submit hardcodes JSON encoding, bypassing registered SubmissionCodecs (§11.4.2)
 
-**File:** `client.go`, `Submit` method (line ~200)
+**Status: Resolved**
+
+**File:** `client.go`, `Submit` method; `hyper.go`, `SubmissionCodec` interface
 
 **Spec requirement (§11.4.2):** Submit SHALL select a `SubmissionCodec`
 from `c.SubmissionCodecs` based on `action.Consumes` and encode `values`
 using the selected codec.
 
-**Current behavior:** `Submit` calls `selectSubmissionMediaType` to choose
-the Content-Type string, but then unconditionally uses `json.NewEncoder`
-to serialize the body. The registered `SubmissionCodec.Decode` method is
-never called (and the codec interface is for decoding, not encoding — there
-is no symmetric `Encode` on `SubmissionCodec`). This means:
-
-- Non-JSON submission types (e.g., `application/x-www-form-urlencoded`)
-  will receive a JSON body with the wrong Content-Type header.
-- Custom SubmissionCodecs are effectively dead code on the client side.
-
-**Impact:** Actions that declare `Consumes: ["application/x-www-form-urlencoded"]`
-will send malformed requests.
-
-**Remediation:** Either (a) add an `Encode` method to the `SubmissionCodec`
-interface for client-side encoding, or (b) introduce a separate
-`SubmissionEncoder` interface that `Client.Submit` can use to encode values
-in the format matching `action.Consumes`.
+**Resolution:** Added an `Encode(values map[string]any) (io.Reader, error)`
+method to the `SubmissionCodec` interface. `JSONSubmissionCodec` and
+`jsonapi.SubmissionCodec` both implement the new method. `Client.Submit`
+now calls `selectSubmissionCodec` to find the matching codec by media type
+and uses its `Encode` method instead of hardcoding `json.NewEncoder`.
+Custom submission codecs are now fully functional on the client side.
 
 ---
 
@@ -253,7 +244,7 @@ before the loop, or initialize it lazily inside the `if` block.
 |-----|---------|----------------|----------------|---------------------------------------------------|
 | D8  | §14.3.4 | Bug            | Resolved        | Decoder now decodes Field.Options                 |
 | D3  | §8.1    | Bug            | Resolved        | Client now merges Target.Query into resolved URL  |
-| D4  | §11.4.2 | Architectural  | Not implemented | Submit hardcodes JSON, ignores SubmissionCodecs    |
+| D4  | §11.4.2 | Architectural  | Resolved        | Submit now uses SubmissionCodec.Encode              |
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
 | D1  | §12     | SHOULD         | Not implemented | No HTML codec                                     |
 | D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |

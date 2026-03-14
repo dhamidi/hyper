@@ -198,15 +198,24 @@ func (c *Client) Submit(ctx context.Context, action Action, values map[string]an
 			u.RawQuery = q.Encode()
 		}
 	} else if len(values) > 0 {
-		// Select submission codec and encode body
-		contentType = c.selectSubmissionMediaType(action.Consumes)
-		var buf bytes.Buffer
-		enc := json.NewEncoder(&buf)
-		enc.SetEscapeHTML(false)
-		if err := enc.Encode(values); err != nil {
-			return nil, fmt.Errorf("hyper: encode submission: %w", err)
+		// Select submission codec and encode body (§11.4.2)
+		codec, ct := c.selectSubmissionCodec(action.Consumes)
+		contentType = ct
+		if codec != nil {
+			encoded, encErr := codec.Encode(values)
+			if encErr != nil {
+				return nil, fmt.Errorf("hyper: encode submission: %w", encErr)
+			}
+			body = encoded
+		} else {
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(values); err != nil {
+				return nil, fmt.Errorf("hyper: encode submission: %w", err)
+			}
+			body = &buf
 		}
-		body = &buf
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
@@ -243,13 +252,22 @@ func (c *Client) Submit(ctx context.Context, action Action, values map[string]an
 			// Rebuild body for retry
 			var retryBody io.Reader
 			if !strings.EqualFold(method, http.MethodGet) && len(values) > 0 {
-				var buf bytes.Buffer
-				enc := json.NewEncoder(&buf)
-				enc.SetEscapeHTML(false)
-				if err := enc.Encode(values); err != nil {
-					return nil, fmt.Errorf("hyper: encode submission retry: %w", err)
+				codec, _ := c.selectSubmissionCodec(action.Consumes)
+				if codec != nil {
+					encoded, encErr := codec.Encode(values)
+					if encErr != nil {
+						return nil, fmt.Errorf("hyper: encode submission retry: %w", encErr)
+					}
+					retryBody = encoded
+				} else {
+					var buf bytes.Buffer
+					enc := json.NewEncoder(&buf)
+					enc.SetEscapeHTML(false)
+					if err := enc.Encode(values); err != nil {
+						return nil, fmt.Errorf("hyper: encode submission retry: %w", err)
+					}
+					retryBody = &buf
 				}
-				retryBody = &buf
 			}
 			req, err = http.NewRequestWithContext(ctx, method, u.String(), retryBody)
 			if err != nil {
@@ -418,30 +436,30 @@ func applyCredential(req *http.Request, cred Credential) {
 	}
 }
 
-// selectSubmissionMediaType picks the media type for a submission body.
-func (c *Client) selectSubmissionMediaType(consumes []string) string {
+// selectSubmissionCodec picks a SubmissionCodec and media type for encoding.
+// It returns the matched codec and media type string. If no codec matches,
+// it returns the first registered codec with a fallback media type.
+func (c *Client) selectSubmissionCodec(consumes []string) (SubmissionCodec, string) {
 	if len(consumes) > 0 {
-		// Try to match the first consumes entry against registered codecs
 		for _, ct := range consumes {
 			for _, sc := range c.SubmissionCodecs {
 				for _, mt := range sc.MediaTypes() {
 					if mt == ct {
-						return mt
+						return sc, mt
 					}
 				}
 			}
 		}
-		// Fall back to the first consumes entry
-		return consumes[0]
 	}
-	// Default to the first registered submission codec's media type
+	// Default to the first registered submission codec
 	if len(c.SubmissionCodecs) > 0 {
 		mts := c.SubmissionCodecs[0].MediaTypes()
 		if len(mts) > 0 {
-			return mts[0]
+			return c.SubmissionCodecs[0], mts[0]
 		}
+		return c.SubmissionCodecs[0], "application/json"
 	}
-	return "application/json"
+	return nil, "application/json"
 }
 
 // decodeResponse reads the HTTP response and decodes it into a Response.

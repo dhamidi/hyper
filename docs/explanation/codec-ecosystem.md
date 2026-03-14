@@ -11,7 +11,7 @@ The `hyper` package provides a native JSON codec:
 import "github.com/dhamidi/hyper"
 
 repCodec := hyper.JSONCodec()           // encodes Representation as JSON
-subCodec := hyper.JSONSubmissionCodec() // decodes JSON request bodies
+subCodec := hyper.JSONSubmissionCodec() // decodes and encodes JSON request bodies
 ```
 
 ## JSON:API support
@@ -36,6 +36,9 @@ request's `Accept` header to pick a codec whose `MediaTypes()` match.
 
 On the **client side**, the `Client` sends an `Accept` header and decodes
 the response using the first codec that matches the response `Content-Type`.
+For submissions, `Client.Submit` selects a `SubmissionCodec` whose
+`MediaTypes()` match `action.Consumes` and calls its `Encode` method to
+serialize the request body in the correct format.
 
 ## Writing your own codec
 

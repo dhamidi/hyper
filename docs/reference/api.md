@@ -99,4 +99,9 @@ hyper.JSONCodec()           // RepresentationCodec for application/json
 hyper.JSONSubmissionCodec() // SubmissionCodec for application/json
 ```
 
+`SubmissionCodec` supports both directions: `Decode` for server-side request
+body parsing, and `Encode` for client-side request body serialization.
+`Client.Submit` selects a codec based on `action.Consumes` and calls `Encode`
+to serialize values in the matching format.
+
 For JSON:API format, see the `jsonapi` subpackage.
