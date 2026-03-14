@@ -95,21 +95,20 @@ form-urlencoded bodies using `url.Values`. Registered as a default in
 
 #### D1 — No HTML RepresentationCodec (§12)
 
+**Status: Resolved**
+
 **Spec requirement (§12):** HTML SHALL be treated as a first-class target
 format. An HTML codec SHOULD render `Link` as `<a>`, actions with fields
 as `<form>`, etc.
 
-**Current behavior:** No HTML codec exists. The `Renderer` can only serve
-JSON (native or JSON:API) and `text/event-stream`.
-
-**Impact:** Applications that need server-rendered HTML must build their
-own codec or use `html/template` outside the `Renderer` pipeline, losing
-content negotiation benefits.
-
-**Remediation:** Implement an HTML `RepresentationCodec` (likely backed by
-`html/template`) that renders representations as semantic HTML. This is a
-SHOULD-level requirement; applications can work around it, but it is a
-stated design goal (§3.4).
+**Resolution:** Implemented `HTMLCodec()` in `html_codec.go` that encodes
+representations as semantic HTML. Links render as `<a>` tags inside `<nav>`,
+actions render as `<form>` elements with `<input>`, `<select>`, and
+`<textarea>` fields, and state values render as `<dl>` (objects) or `<ol>`
+(collections). The codec supports both `RenderDocument` (full HTML page)
+and `RenderFragment` modes, uses `html/template.HTMLEscapeString` for XSS
+prevention, and integrates with the `Renderer` pipeline via content
+negotiation on `text/html`.
 
 ---
 
@@ -210,7 +209,7 @@ before the loop, or initialize it lazily inside the `if` block.
 | D3  | §8.1    | Bug            | Resolved        | Client now merges Target.Query into resolved URL  |
 | D4  | §11.4.2 | Architectural  | Resolved        | Submit now uses SubmissionCodec.Encode              |
 | D6  | §11.8   | Architectural  | Not implemented | No FormSubmissionCodec                            |
-| D1  | §12     | SHOULD         | Not implemented | No HTML codec                                     |
+| D1  | §12     | SHOULD         | Resolved        | HTMLCodec renders semantic HTML via Renderer       |
 | D2  | §13     | SHOULD         | Not implemented | No Markdown codec                                 |
 | D5  | §11.8   | Minor          | Resolved        | Default Accept header now application/vnd.api+json |
 | D7  | §8.2.1  | Minor          | Resolved        | Error on unresolved Route targets without Resolver |

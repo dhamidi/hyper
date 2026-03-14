@@ -5,15 +5,30 @@ This design allows the same API handlers to serve multiple formats.
 
 ## Built-in codecs
 
-The `hyper` package provides a native JSON codec:
+The `hyper` package provides several built-in codecs:
 
 ```go
 import "github.com/dhamidi/hyper"
 
-repCodec  := hyper.JSONCodec()            // encodes Representation as JSON
-jsonSub   := hyper.JSONSubmissionCodec() // decodes and encodes JSON request bodies
-formSub   := hyper.FormSubmissionCodec() // decodes and encodes form-urlencoded request bodies
+jsonCodec := hyper.JSONCodec()            // encodes Representation as JSON
+htmlCodec := hyper.HTMLCodec()            // encodes Representation as semantic HTML
+jsonSub   := hyper.JSONSubmissionCodec()  // decodes and encodes JSON request bodies
+formSub   := hyper.FormSubmissionCodec()  // decodes and encodes form-urlencoded request bodies
 ```
+
+## HTML support
+
+The HTML codec renders representations as semantic HTML:
+
+- **Links** become `<a>` tags inside a `<nav>` element
+- **Actions** become `<form>` tags with `<input>`, `<select>`, and `<textarea>` fields
+- **Object state** renders as a `<dl>` (definition list)
+- **Collection state** renders as an `<ol>` (ordered list)
+- **Embedded representations** render as nested `<article>` elements inside `<section>`
+
+The codec supports both `RenderDocument` (full HTML page with `<!DOCTYPE>`)
+and `RenderFragment` (just the `<article>` element) modes. All output is
+HTML-escaped to prevent XSS.
 
 ## JSON:API support
 
