@@ -1090,7 +1090,138 @@ func handleTaskUpdate(renderer hyper.Renderer) http.HandlerFunc {
 
 The title field shows `<em class="error">Title is required</em>` and the submitted values are preserved in the form inputs, so the user does not lose their work.
 
-## 7. Spec Feedback
+## 7. How-To Guide and Experience Report (Diataxis style)
+
+This section captures practical guidance from implementing `examples/tasklist`
+against real browser behavior (`htmx` + forms + content negotiation), not just
+the conceptual happy path.
+
+### 7.1 Goal: Make Hypermedia Feel "Modern" Without Breaking the Model
+
+Modern expectations for list UIs are:
+
+- create without losing context
+- update rows in place
+- delete with immediate visual feedback
+- no full page flash for partial interactions
+
+The hypermedia-compatible approach:
+
+1. Keep `Representation` as the source of truth.
+2. Use `RenderMode` to choose document vs fragment.
+3. Let templates render affordances from `Actions`/`Links`.
+4. Prefer swapping a stable container when parent-level state can change.
+
+### 7.2 Pattern: Container-Level Swap for Delete
+
+Challenge:
+
+- Deleting one row is easy (`hx-target="closest article"`), but list-level state
+  (`taskCount`, empty-state message, pagination controls) becomes stale.
+
+Pattern:
+
+- Return a refreshed list representation for delete fragment responses.
+- Swap a stable parent container (e.g. `#task-list-root`) instead of only the row.
+
+Example action hints:
+
+```go
+hyper.Action{
+    Name:   "delete",
+    Method: "DELETE",
+    Target: hyper.Pathf("/tasks/%d", t.ID),
+    Hints: map[string]any{
+        "hx-delete": "/tasks/42",
+        "hx-target": "#task-list-root",
+        "hx-swap":   "outerHTML",
+    },
+}
+```
+
+### 7.3 Pattern: Explicit Fragment Preference for htmx
+
+Challenge:
+
+- Some clients or automation tools do not send the `Accept` header you expect.
+- HTML fragment flows should still behave correctly for `HX-Request: true`.
+
+Pattern:
+
+- Treat `HX-Request: true` as an explicit fragment signal.
+- Otherwise, use renderer negotiation (not raw string matching) to decide if
+  the handler should follow HTML behavior such as redirects vs JSON payloads.
+
+Example:
+
+```go
+func prefersHTML(r *http.Request, renderer hyper.Renderer) bool {
+    if r.Header.Get("HX-Request") == "true" {
+        return true
+    }
+    mediaType, ok := renderer.NegotiatedMediaType(r)
+    return ok && mediaType == "text/html"
+}
+```
+
+### 7.4 Pattern: Default Values Belong in Domain Logic, Not UI Inputs
+
+Challenge:
+
+- A create form with optional `status` can expose unnecessary complexity and
+  inconsistent defaults between API and HTML.
+
+Pattern:
+
+- Remove non-essential create fields from the action.
+- Set domain defaults server-side (`Create(title)` => `pending`).
+- Reflect defaults in read models, not user input ceremony.
+
+Result:
+
+- Cleaner form.
+- Fewer validation branches.
+- Stable semantics across codecs.
+
+### 7.5 Pattern: Compact Task Rows with Action Affordances
+
+Challenge:
+
+- Generic hypermedia rendering is semantically rich but can be vertically dense.
+
+Pattern:
+
+- Keep hypermedia controls intact (forms/actions), but customize component
+  markup/CSS for dense rows:
+  - title + status grouped left
+  - toggle/delete action forms grouped right
+  - preserve method override and htmx attrs
+
+This is the core htmlc value proposition: preserve representation semantics,
+customize presentation aggressively.
+
+### 7.6 Common Failure Modes and Fixes
+
+1. `DELETE` appears to "do nothing" in browser automation.
+   Fix: verify whether request is htmx (`HX-Request`) and ensure response body
+   is a fragment for swaps (status `200`), not empty `204`.
+2. Action buttons render but are not actionable.
+   Fix: fail fast or omit actions when target resolution fails; avoid emitting
+   controls with missing `href`.
+3. Fragment responses accidentally render full documents.
+   Fix: centralize `renderMode(r)` and always pass it to `RespondWithMode`.
+4. Form error rerender loses submitted values.
+   Fix: use `hyper.WithErrors(fields, values, errors)` instead of rebuilding
+   fields manually.
+
+### 7.7 Working Rules of Thumb
+
+1. If an interaction can change parent state, swap at parent scope.
+2. Keep `Hints` UI-specific, but keep business defaults in handlers/store.
+3. Use one representation graph for HTML and JSON to prevent drift.
+4. Add browser-level checks (not only unit tests) for htmx flows.
+
+## 8. Spec Feedback
 
 - **`representationToScope` should be a library function.** Every application that uses a template engine with hyper must write its own scope conversion. Consider providing `hyper.ToScope(ctx context.Context, rep Representation, opts EncodeOptions) map[string]any` as a convenience in the hyper package. This would standardize the scope shape across template engines and reduce boilerplate. The function could live alongside the existing `BuildRepresentation` helper.
 

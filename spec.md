@@ -977,6 +977,7 @@ type Renderer struct {
 func (r Renderer) Respond(http.ResponseWriter, *http.Request, int, Representation) error
 func (r Renderer) RespondAs(http.ResponseWriter, *http.Request, int, string, Representation) error
 func (r Renderer) RespondWithMode(http.ResponseWriter, *http.Request, int, Representation, RenderMode) error
+func (r Renderer) NegotiatedMediaType(*http.Request) (string, bool)
 ```
 
 ### 10.2 Semantics
@@ -998,6 +999,17 @@ func (r Renderer) RespondWithMode(http.ResponseWriter, *http.Request, int, Repre
 supplied `RenderMode` is passed through to the codec via `EncodeOptions.Mode`,
 overriding the default. This allows handlers to emit a fragment (e.g. for htmx
 partial responses) by passing `RenderFragment`.
+
+`NegotiatedMediaType` SHALL:
+
+1. evaluate the request `Accept` header against registered codecs using the
+   same negotiation algorithm as `Respond`
+2. return the chosen media type and `true` when a codec is available
+3. return `("", false)` when no codec can be selected
+
+Handlers MAY use `NegotiatedMediaType` for control-flow decisions that must
+match renderer negotiation exactly (for example, deciding redirect behavior or
+choosing a non-representation fast path) without duplicating header parsing.
 
 The renderer SHOULD set the `Content-Type` response header accordingly.
 

@@ -9,7 +9,7 @@ cd examples/tasklist
 go run .
 ```
 
-The server starts on [http://localhost:8080](http://localhost:8080).
+The server starts on [http://localhost:8082](http://localhost:8082).
 
 ## How it works
 
@@ -27,7 +27,7 @@ A `representationToScope` bridge function converts `hyper.Representation` values
 HTML views are defined as Vue SFC templates in the `components/` directory:
 
 - **`task-list.vue`** — Full page layout with task list and create form (maps to `Kind: "task-list"`)
-- **`task.vue`** — Single task with toggle and delete actions (maps to `Kind: "task"`)
+- **`task.vue`** — Single-row task with inline toggle and delete actions (maps to `Kind: "task"`)
 - **`task-form.vue`** — Task creation form with field-driven inputs and validation error display
 
 ### Content negotiation
@@ -35,13 +35,13 @@ HTML views are defined as Vue SFC templates in the `components/` directory:
 Request HTML (for browsers):
 
 ```bash
-curl -s http://localhost:8080/ -H 'Accept: text/html'
+curl -s http://localhost:8082/ -H 'Accept: text/html'
 ```
 
 Request JSON (for API clients):
 
 ```bash
-curl -s http://localhost:8080/ -H 'Accept: application/json' | jq .
+curl -s http://localhost:8082/ -H 'Accept: application/json' | jq .
 ```
 
 ### htmx fragment responses
@@ -49,30 +49,34 @@ curl -s http://localhost:8080/ -H 'Accept: application/json' | jq .
 When the `HX-Request: true` header is present, the codec renders fragments (no DOCTYPE wrapper) suitable for htmx swaps:
 
 ```bash
-curl -s http://localhost:8080/ -H 'Accept: text/html' -H 'HX-Request: true'
+curl -s http://localhost:8082/ -H 'Accept: text/html' -H 'HX-Request: true'
 ```
 
 ### Creating tasks
 
 ```bash
-curl -s -X POST http://localhost:8080/tasks \
-  -d 'title=Buy+milk&status=pending' \
+curl -s -X POST http://localhost:8082/tasks \
+  -d 'title=Buy+milk' \
   -H 'Accept: application/json' | jq .
 ```
+
+New tasks default to `pending`; create does not expose a status field.
 
 ### Toggling task status
 
 ```bash
-curl -s -X POST http://localhost:8080/tasks/1/toggle \
+curl -s -X POST http://localhost:8082/tasks/1/toggle \
   -H 'Accept: application/json' | jq .
 ```
 
 ### Deleting tasks
 
 ```bash
-curl -s -X DELETE http://localhost:8080/tasks/1 \
-  -H 'Accept: application/json' | jq .
+curl -i -X DELETE http://localhost:8082/tasks/1 \
+  -H 'Accept: application/json'
 ```
+
+For htmx requests (`HX-Request: true`), delete returns an updated `task-list` fragment and swaps `#task-list-root` so list-level state stays consistent.
 
 ## Architecture
 
@@ -81,7 +85,8 @@ curl -s -X DELETE http://localhost:8080/tasks/1 \
 - **htmlcCodec**: A custom `RepresentationCodec` that maps `Representation.Kind` to a Vue SFC component name and uses `representationToScope` to bridge the representation into template data.
 - **representationToScope**: Converts structured `hyper.Representation` fields into flat `map[string]any` scopes with resolved URLs, flattened state, and pre-filtered htmx attributes.
 - **RenderMode**: The `HX-Request` header drives fragment vs. document rendering — htmx requests get bare component markup, full page loads get a complete HTML document.
-- **htmx integration**: Toggle and delete actions include htmx hint attributes (`hx-post`, `hx-delete`, `hx-target`, `hx-swap`) rendered via `v-bind` in templates, so the HTML interface updates without full page reloads.
+- **htmx integration**: Toggle and delete actions include htmx hint attributes (`hx-post`, `hx-delete`, `hx-target`, `hx-swap`) rendered via `v-bind` in templates. Delete swaps `#task-list-root` with a refreshed list fragment.
+- **Compact task rows**: Each task is rendered as a dense single row with title/status on the left and action buttons on the right.
 - **Method override**: DELETE actions are rendered as POST forms with a hidden `_method=DELETE` field. The `methodoverride.Wrap` middleware translates these back to DELETE requests.
 - **Typewriter styling**: A custom `style.css` provides a monospace, cream-background aesthetic inspired by typewritten pages.
 
